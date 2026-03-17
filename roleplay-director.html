@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Roleplay Director</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 
 <script type="module">
 import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
@@ -14,18 +13,12 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc,
          collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp }
                            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-// ═══════════════════════════════════════════
-//  GLOBALS
-// ═══════════════════════════════════════════
 let fbApp, auth, db, uid;
 let geminiKey = '';
 let character = null;
 let session   = null;
 let timerHandle = null;
 
-// ═══════════════════════════════════════════
-//  BOOT
-// ═══════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('fb_cfg');
   if (saved) { try { bootFirebase(JSON.parse(saved)); } catch(e) { showScreen('config'); } }
@@ -45,36 +38,25 @@ function bootFirebase(cfg) {
         geminiKey = localStorage.getItem('gemini_key') || '';
         if (!geminiKey) { showScreen('gemini'); return; }
         await loadAndShow();
-      } else {
-        showScreen('login');
-      }
+      } else { showScreen('login'); }
     });
   } catch(e) { alert('Firebase error: ' + e.message); showScreen('config'); }
 }
 
-// ═══════════════════════════════════════════
-//  SCREENS
-// ═══════════════════════════════════════════
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = q('#screen-' + name);
   if (el) el.classList.add('active');
 }
 
-// ═══════════════════════════════════════════
-//  CONFIG SCREEN
-// ═══════════════════════════════════════════
 window.saveConfig = () => {
-  const fields = ['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId'];
   const cfg = {};
-  fields.forEach(f => { cfg[f] = q('#fb_' + f).value.trim(); });
+  ['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId']
+    .forEach(f => { cfg[f] = q('#fb_' + f).value.trim(); });
   if (!cfg.apiKey || !cfg.projectId) { alert('apiKey y projectId son obligatorios'); return; }
   bootFirebase(cfg);
 };
 
-// ═══════════════════════════════════════════
-//  GEMINI KEY SCREEN
-// ═══════════════════════════════════════════
 window.saveGeminiKey = () => {
   const k = q('#geminiKeyInput').value.trim();
   if (!k) return;
@@ -83,23 +65,13 @@ window.saveGeminiKey = () => {
   loadAndShow();
 };
 
-// ═══════════════════════════════════════════
-//  AUTH
-// ═══════════════════════════════════════════
 window.loginGoogle = async () => {
   try { await signInWithPopup(auth, new GoogleAuthProvider()); }
   catch(e) { alert('Login error: ' + e.message); }
 };
 window.logout = async () => { await signOut(auth); showScreen('login'); };
-window.resetConfig = () => {
-  localStorage.removeItem('fb_cfg');
-  localStorage.removeItem('gemini_key');
-  location.reload();
-};
+window.resetConfig = () => { localStorage.removeItem('fb_cfg'); localStorage.removeItem('gemini_key'); location.reload(); };
 
-// ═══════════════════════════════════════════
-//  LOAD CHARACTER
-// ═══════════════════════════════════════════
 async function loadAndShow() {
   const snap = await getDoc(doc(db, 'users', uid, 'meta', 'character'));
   if (snap.exists()) {
@@ -108,11 +80,8 @@ async function loadAndShow() {
     refreshMainUI();
     await refreshMemoryPanel();
     showScreen('main');
-    // Check if a scheduled directive is pending
     await checkPendingDirective();
-  } else {
-    showScreen('setup');
-  }
+  } else { showScreen('setup'); }
 }
 
 function refreshMainUI() {
@@ -121,13 +90,9 @@ function refreshMainUI() {
   q('#charStateDisplay').textContent = character.emotionalState || 'Sin estado emocional todavía.';
 }
 
-// ═══════════════════════════════════════════
-//  SETUP / CHARACTER FORM
-// ═══════════════════════════════════════════
 window._concepts = [];
 window.focusConcept  = () => q('#conceptInput').focus();
 window.removeConcept = (i) => { window._concepts.splice(i,1); renderConcepts(); };
-
 window.handleConceptKey = (e) => {
   if (e.key === 'Enter' || e.key === ',') {
     e.preventDefault();
@@ -143,39 +108,36 @@ function renderConcepts() {
   const area = q('#conceptsArea'), input = q('#conceptInput');
   area.innerHTML = '';
   window._concepts.forEach((c,i) => {
-    const t = document.createElement('div');
-    t.className = 'concept-tag';
-    t.innerHTML = `${esc(c)}<button onclick="removeConcept(${i})">×</button>`;
+    const t = document.createElement('span');
+    t.className = 'tag';
+    t.innerHTML = esc(c) + ' <button onclick="removeConcept(' + i + ')">x</button>';
     area.appendChild(t);
   });
   area.appendChild(input);
 }
 
-window.updateInterval = v => {
-  const display = formatIntervalLabel(parseInt(v));
-  q('#intervalVal').textContent = display;
-};
-window.updateTurns = v => { q('#turnsVal').textContent = v; };
+window.updateInterval = v => { q('#intervalVal').textContent = formatInterval(parseInt(v)); };
+window.updateTurns    = v => { q('#turnsVal').textContent = v; };
 
-function formatIntervalLabel(seconds) {
-  if (seconds < 60)   return seconds + 's';
-  if (seconds < 3600) return Math.round(seconds/60) + 'min';
-  if (seconds < 86400) return (seconds/3600).toFixed(1).replace('.0','') + 'h';
-  return (seconds/3600).toFixed(0) + 'h';
+function formatInterval(s) {
+  if (s < 60)    return s + 's';
+  if (s < 3600)  return Math.round(s/60) + ' min';
+  if (s < 86400) return (s/3600).toFixed(1).replace('.0','') + 'h';
+  return Math.round(s/3600) + 'h';
 }
 
 function fillSetupForm() {
   if (!character) return;
-  q('#charName').value          = character.name       || '';
-  q('#charRole').value          = character.role       || '';
-  q('#charInit').value          = character.initMsg    || '';
-  q('#actorModel').value        = character.actorModel || 'gemini-1.5-flash';
-  q('#dirModel').value          = character.dirModel   || 'gemini-1.5-flash';
+  q('#charName').value   = character.name     || '';
+  q('#charRole').value   = character.role     || '';
+  q('#charInit').value   = character.initMsg  || '';
+  q('#actorModel').value = character.actorModel || 'gemini-2.0-flash';
+  q('#dirModel').value   = character.dirModel   || 'gemini-2.0-flash';
   const iv = character.intervalSec || 3600;
   q('#intervalSlider').value    = iv;
-  q('#intervalVal').textContent = formatIntervalLabel(iv);
-  q('#turnsSlider').value       = character.maxTurns   || 10;
-  q('#turnsVal').textContent    = character.maxTurns   || 10;
+  q('#intervalVal').textContent = formatInterval(iv);
+  q('#turnsSlider').value       = character.maxTurns || 10;
+  q('#turnsVal').textContent    = character.maxTurns || 10;
   window._concepts = [...(character.concepts || [])];
   renderConcepts();
 }
@@ -195,7 +157,7 @@ window.saveCharacter = async () => {
     dirModel:    q('#dirModel').value,
     intervalSec: parseInt(q('#intervalSlider').value),
     maxTurns:    parseInt(q('#turnsSlider').value),
-    createdAt:   character?.createdAt || new Date().toISOString(),
+    createdAt:   character && character.createdAt ? character.createdAt : new Date().toISOString(),
   };
   await setDoc(doc(db, 'users', uid, 'meta', 'character'), character);
   refreshMainUI();
@@ -203,227 +165,144 @@ window.saveCharacter = async () => {
   showScreen('main');
 };
 
-// ═══════════════════════════════════════════
-//  FIRESTORE PERSISTENCE
-// ═══════════════════════════════════════════
 function todayKey() { return new Date().toISOString().slice(0,10); }
 
 async function persistMsg(role, content, type) {
   await addDoc(collection(db, 'users', uid, 'messages'), {
-    role, content, type,
-    date: todayKey(),
-    ts: serverTimestamp(),
+    role, content, type, date: todayKey(), ts: serverTimestamp(),
   });
 }
 
-async function loadRecentSummaries(days = 7) {
-  const snap = await getDocs(
-    query(collection(db,'users',uid,'summaries'), orderBy('date','desc'), limit(days))
-  );
-  const arr = [];
-  snap.forEach(d => arr.push(d.data()));
-  return arr.reverse();
+async function loadRecentSummaries(days) {
+  days = days || 7;
+  const snap = await getDocs(query(collection(db,'users',uid,'summaries'), orderBy('date','desc'), limit(days)));
+  const arr = []; snap.forEach(d => arr.push(d.data())); return arr.reverse();
 }
 
 async function loadTodayMessages() {
-  const snap = await getDocs(
-    query(collection(db,'users',uid,'messages'), orderBy('ts','asc'))
-  );
-  const arr = [];
-  snap.forEach(d => { const d2 = d.data(); if (d2.date === todayKey()) arr.push(d2); });
-  return arr;
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','asc')));
+  const arr = []; snap.forEach(d => { const d2=d.data(); if(d2.date===todayKey()) arr.push(d2); }); return arr;
 }
 
 async function refreshMemoryPanel() {
   const days = await loadRecentSummaries();
   const panel = q('#memoryPanel');
   if (!panel) return;
-  if (!days.length) {
-    panel.innerHTML = '<p class="mem-empty">Sin historial previo. Primera sesión.</p>';
-    return;
-  }
-  panel.innerHTML = days.map(d => `
-    <div class="mem-day">
-      <div class="mem-date">${d.date}</div>
-      <div class="mem-summary">${esc(d.summary || '')}</div>
-      <div class="mem-state">Estado: <em>${esc(d.emotionalState || '')}</em></div>
-    </div>
-  `).join('');
+  if (!days.length) { panel.innerHTML = '<p class="muted">Sin historial previo.</p>'; return; }
+  panel.innerHTML = days.map(d =>
+    '<div class="mem-day"><strong>' + d.date + '</strong><p>' + esc(d.summary||'') + '</p><p class="muted">Estado: ' + esc(d.emotionalState||'') + '</p></div>'
+  ).join('');
 }
 
-// ═══════════════════════════════════════════
-//  PERSISTENT TIMER (survives browser close)
-// ═══════════════════════════════════════════
-async function saveNextDirectiveTime(timestampMs) {
-  await setDoc(doc(db,'users',uid,'meta','timer'), {
-    nextDirectiveAt: timestampMs,
-    updatedAt: Date.now(),
-  });
+async function saveNextDirectiveTime(ms) {
+  await setDoc(doc(db,'users',uid,'meta','timer'), { nextDirectiveAt: ms });
 }
-
 async function clearNextDirectiveTime() {
   await setDoc(doc(db,'users',uid,'meta','timer'), { nextDirectiveAt: null });
 }
-
 async function getNextDirectiveTime() {
   const snap = await getDoc(doc(db,'users',uid,'meta','timer'));
-  if (snap.exists()) return snap.data().nextDirectiveAt || null;
-  return null;
+  return snap.exists() ? snap.data().nextDirectiveAt || null : null;
 }
-
 async function checkPendingDirective() {
   const nextAt = await getNextDirectiveTime();
   if (!nextAt) return;
-  const now = Date.now();
-  if (now >= nextAt) {
-    // Directive is due — show notification
-    addSysMsg('⏰ Una directriz estaba programada. Inicia sesión para ejecutarla.');
-    q('#btnStart').textContent = '▶ Iniciar sesión (directriz pendiente)';
+  const left = Math.round((nextAt - Date.now()) / 1000);
+  if (left <= 0) {
+    addSysMsg('Habia una directriz pendiente. Inicia sesion para ejecutarla.');
+    q('#btnStart').textContent = 'Iniciar (directriz pendiente)';
   } else {
-    // Show how much time remains
-    const remaining = Math.round((nextAt - now) / 1000);
-    setTimer(remaining);
-    q('#nextLabel').textContent = 'próxima directriz (abre la app cuando toque)';
+    setTimer(left);
+    q('#nextLabel').textContent = 'proxima directriz programada';
     startCountdown(nextAt);
   }
 }
-
 function startCountdown(nextAtMs) {
   clearInterval(timerHandle);
   timerHandle = setInterval(() => {
     const left = Math.round((nextAtMs - Date.now()) / 1000);
-    if (left <= 0) {
-      clearInterval(timerHandle);
-      setTimer(0);
-      addSysMsg('⏰ Directriz lista. Inicia sesión para ejecutarla.');
-      return;
-    }
+    if (left <= 0) { clearInterval(timerHandle); setTimer(0); return; }
     setTimer(left);
   }, 1000);
 }
 
-// ═══════════════════════════════════════════
-//  MEMORY → ACTOR SYSTEM PROMPT
-// ═══════════════════════════════════════════
 async function buildActorSystem() {
   const summaries = await loadRecentSummaries(7);
-  let memBlock = '';
+  let mem = '';
   if (summaries.length) {
-    memBlock = '\n\n== MEMORIA DE SESIONES ANTERIORES ==\n';
-    summaries.forEach(s => {
-      memBlock += `\n[${s.date}] ${s.summary} Estado emocional: ${s.emotionalState}\n`;
-    });
-    memBlock += '== FIN MEMORIA ==\n';
+    mem = '\n\n=== MEMORIA DE SESIONES ANTERIORES ===\n';
+    summaries.forEach(s => { mem += '\n[' + s.date + '] ' + s.summary + ' Estado emocional: ' + s.emotionalState + '\n'; });
+    mem += '=== FIN MEMORIA ===\n';
   }
-  if (character.emotionalState) {
-    memBlock += `\nTU ESTADO EMOCIONAL ACTUAL: ${character.emotionalState}\n`;
-  }
-  return `${character.role}
-${memBlock}
-INSTRUCCIONES:
-- Eres un personaje con historia acumulada. Tu actitud y comportamiento deben reflejar todo lo vivido en sesiones anteriores.
-- Responde siempre en primera persona, de forma expresiva y narrativa.
-- Cuando recibas instrucciones entre corchetes [DIRECTOR: ...], incorpóralas naturalmente sin mencionarlas.
-- Nunca rompas el personaje ni menciones que eres una IA.`;
+  if (character.emotionalState) mem += '\nTU ESTADO EMOCIONAL ACTUAL: ' + character.emotionalState + '\n';
+  return character.role + '\n' + mem + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [DIRECTOR: ...], incorpóralas naturalmente sin mencionarlas.\n- Nunca rompas el personaje.';
 }
 
-// ═══════════════════════════════════════════
-//  DAILY SUMMARY
-// ═══════════════════════════════════════════
-async function saveDailySummary(todayMsgs) {
-  if (!todayMsgs.length) return;
-  const transcript = todayMsgs
-    .filter(m => m.type !== 'system')
-    .map(m => `[${m.type.toUpperCase()}]: ${m.content}`)
-    .join('\n\n').slice(0, 7000);
-
+async function saveDailySummary(msgs) {
+  if (!msgs.length) return;
+  const transcript = msgs.filter(m=>m.type!=='system').map(m=>'['+m.type.toUpperCase()+']: '+m.content).join('\n\n').slice(0,7000);
   const prevState = character.emotionalState || 'El personaje acaba de comenzar.';
-  const sysPrompt = `Eres un archivista narrativo. Resume sesiones de roleplay y actualiza el estado emocional del personaje.`;
-  const userPrompt = `ESTADO EMOCIONAL ANTERIOR: ${prevState}
-
-TRANSCRIPCIÓN DE HOY (${todayKey()}):
-${transcript}
-
-Responde ÚNICAMENTE con JSON sin markdown:
-{"summary":"3-5 frases sobre qué ocurrió hoy.","emotionalState":"2-3 frases sobre cómo se siente el personaje ahora."}`;
-
   try {
-    const { text } = await callGemini(character.dirModel, sysPrompt, [{ role:'user', content: userPrompt }]);
-    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    const res = await callGemini('gemini-2.0-flash',
+      'Eres un archivista narrativo. Resume sesiones de roleplay y actualiza el estado emocional del personaje.',
+      [{ role:'user', content:'ESTADO ANTERIOR: ' + prevState + '\n\nTRANSCRIPCION (' + todayKey() + '):\n' + transcript + '\n\nResponde SOLO con JSON sin markdown:\n{"summary":"3-5 frases sobre que ocurrio.","emotionalState":"2-3 frases sobre como se siente ahora."}' }]
+    );
+    const parsed = JSON.parse(res.text.replace(/```json|```/g,'').trim());
     await setDoc(doc(db,'users',uid,'summaries',todayKey()), {
-      date: todayKey(), summary: parsed.summary,
-      emotionalState: parsed.emotionalState, messageCount: todayMsgs.length,
+      date: todayKey(), summary: parsed.summary, emotionalState: parsed.emotionalState, messageCount: msgs.length,
     });
     character.emotionalState = parsed.emotionalState;
-    await updateDoc(doc(db,'users',uid,'meta','character'), {
-      emotionalState: parsed.emotionalState, lastSession: todayKey(),
-    });
-    log('Resumen del día guardado.');
-  } catch(e) { log('⚠ No se pudo guardar resumen: ' + e.message); }
+    await updateDoc(doc(db,'users',uid,'meta','character'), { emotionalState: parsed.emotionalState, lastSession: todayKey() });
+    log('Resumen guardado.');
+  } catch(e) { log('Error resumen: ' + e.message); }
 }
 
-// ═══════════════════════════════════════════
-//  GEMINI API
-// ═══════════════════════════════════════════
 async function callGemini(model, systemPrompt, messages) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + geminiKey;
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
-    contents: messages.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    })),
+    contents: messages.map(m => ({ role: m.role==='assistant'?'model':'user', parts: [{ text: m.content }] })),
     generationConfig: { temperature: 0.9, maxOutputTokens: 1024 },
   };
   const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
   if (!res.ok) {
-    const err = await res.json().catch(()=>({}));
-    throw new Error(err?.error?.message || 'HTTP ' + res.status);
+    const err = await res.json().catch(function(){return {};});
+    throw new Error((err.error && err.error.message) || 'HTTP ' + res.status);
   }
   const data = await res.json();
-  const text   = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const tokens = data?.usageMetadata?.totalTokenCount || Math.ceil(text.length/4);
-  return { text, tokens };
+  return {
+    text:   (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text) || '',
+    tokens: (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0,
+  };
 }
 
-// ═══════════════════════════════════════════
-//  SESSION
-// ═══════════════════════════════════════════
 window.startSession = async () => {
   if (!character) return;
   session = { history:[], system:'', turns:0, dirs:0, tokens:0, paused:false, todayMsgs:[] };
   setBtns(true);
   clearChat();
-  setLed('actor','run','Iniciando...');
-  setLed('dir','on','En espera');
-  q('#btnStart').textContent = '▶ Iniciar sesión';
+  q('#btnStart').textContent = 'Iniciar sesion';
+  setStatus('actor', 'run', 'Iniciando...');
+  setStatus('dir',   'idle', 'En espera');
 
   const existing = await loadTodayMessages();
   if (existing.length) {
-    addSysMsg('Retomando sesión de hoy · ' + now());
+    addSysMsg('Retomando sesion de hoy - ' + now());
     existing.forEach(m => {
-      if (m.type === 'actor') {
-        appendMsg('actor', m.content, character.actorModel);
-        session.history.push({ role:'assistant', content: m.content });
-        session.turns++;
-      } else if (m.type === 'director') {
-        appendMsg('director', m.content, '');
-        session.dirs++;
-        session.history.push({ role:'user', content:`[DIRECTOR: ${m.content}]` });
-      }
+      if (m.type==='actor')    { addMsg('actor', m.content);    session.history.push({ role:'assistant', content:m.content }); session.turns++; }
+      if (m.type==='director') { addMsg('director', m.content); session.dirs++; session.history.push({ role:'user', content:'[DIRECTOR: ' + m.content + ']' }); }
     });
     session.todayMsgs = existing;
-    addSysMsg(`${existing.length} mensajes recuperados.`);
+    addSysMsg(existing.length + ' mensajes recuperados.');
   } else {
-    addSysMsg('Nueva sesión · ' + now());
+    addSysMsg('Nueva sesion - ' + now());
   }
 
   session.system = await buildActorSystem();
-
   if (!session.history.length) {
     session.history.push({ role:'user', content: character.initMsg || 'Comienza la escena.' });
   } else {
-    session.history.push({ role:'user', content:'[Continúa la escena desde donde la dejaste.]' });
+    session.history.push({ role:'user', content:'[Continua desde donde lo dejaste.]' });
   }
 
   await runActor();
@@ -432,71 +311,60 @@ window.startSession = async () => {
 
 async function runActor() {
   if (!session) return;
-  setLed('actor','run','Escribiendo...');
-  showTyping('actor');
+  setStatus('actor','run','Escribiendo...');
+  showTyping();
   try {
-    const { text, tokens } = await callGemini(character.actorModel, session.system, session.history);
+    const res = await callGemini(character.actorModel, session.system, session.history);
     hideTyping();
-    session.history.push({ role:'assistant', content:text });
-    session.tokens += tokens;
+    session.history.push({ role:'assistant', content:res.text });
+    session.tokens += res.tokens;
     session.turns++;
-    appendMsg('actor', text, character.actorModel);
-    setLed('actor','on','Listo');
+    addMsg('actor', res.text);
+    setStatus('actor','ok','Listo');
     updateStats();
-    log(`Turno ${session.turns}.`);
-    await persistMsg('assistant', text, 'actor');
-    session.todayMsgs.push({ type:'actor', content:text });
+    log('Turno ' + session.turns);
+    await persistMsg('assistant', res.text, 'actor');
+    session.todayMsgs.push({ type:'actor', content:res.text });
     if (session.turns >= character.maxTurns) {
-      addSysMsg(`Límite de ${character.maxTurns} turnos. Cerrando sesión...`);
+      addSysMsg('Limite de turnos alcanzado. Cerrando...');
       await endSession();
     }
   } catch(e) {
     hideTyping();
-    setLed('actor','err','Error');
+    setStatus('actor','err','Error');
     addSysMsg('Error actor: ' + e.message);
-    log('❌ ' + e.message);
+    log('Error: ' + e.message);
   }
 }
 
 async function runDirector() {
   if (!session || session.paused) return;
-  setLed('dir','run','Pensando...');
+  setStatus('dir','run','Pensando...');
   log('Generando directriz...');
 
-  const conceptList = (character.concepts||[]).length
-    ? character.concepts.join(', ')
-    : 'drama, tensión interior, giro inesperado';
-
-  const recent = session.history.slice(-6)
-    .map(m => `${m.role==='user'?'PROMPT':'ACTOR'}: ${m.content}`).join('\n\n');
-
-  const stateCtx = character.emotionalState
-    ? `\nESTADO EMOCIONAL ACTUAL: ${character.emotionalState}\n` : '';
-
-  const sysP = `Eres un director creativo de narrativa interactiva de larga duración. El personaje lleva días en desarrollo. Introduce giros y matices coherentes con su historia acumulada.`;
-  const userP = `CONCEPTOS TEMÁTICOS: ${conceptList}
-${stateCtx}
-ESCENA RECIENTE:
-${recent}
-
-Genera UNA instrucción directorial concreta (1-2 frases) que empuje al personaje a confrontar o transformar algo de su estado emocional. Solo la instrucción, sin prefijos.`;
+  const conceptList = (character.concepts && character.concepts.length) ? character.concepts.join(', ') : 'drama, tension, giro inesperado';
+  const recent = session.history.slice(-6).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n\n');
+  const stateCtx = character.emotionalState ? '\nESTADO EMOCIONAL: ' + character.emotionalState + '\n' : '';
 
   try {
-    const { text, tokens } = await callGemini(character.dirModel, sysP, [{ role:'user', content:userP }]);
-    session.tokens += tokens;
+    const res = await callGemini(character.dirModel,
+      'Eres un director creativo de narrativa interactiva de larga duracion. Introduce giros coherentes con la historia acumulada.',
+      [{ role:'user', content:'CONCEPTOS: ' + conceptList + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nGenera UNA instruccion directorial (1-2 frases) que empuje al personaje a confrontar su estado emocional. Solo la instruccion, sin prefijos.' }]
+    );
+    session.tokens += res.tokens;
     session.dirs++;
-    appendMsg('director', text, '');
-    setLed('dir','on','En espera');
+    addMsg('director', res.text);
+    setStatus('dir','ok','En espera');
     updateStats();
-    log(`Directriz #${session.dirs}.`);
-    await persistMsg('user', text, 'director');
-    session.todayMsgs.push({ type:'director', content:text });
-    session.history.push({ role:'user', content:`[DIRECTOR: ${text}]` });
+    log('Directriz #' + session.dirs);
+    await persistMsg('user', res.text, 'director');
+    session.todayMsgs.push({ type:'director', content:res.text });
+    session.history.push({ role:'user', content:'[DIRECTOR: ' + res.text + ']' });
     await runActor();
   } catch(e) {
-    setLed('dir','err','Error director');
+    setStatus('dir','err','Error');
     addSysMsg('Error director: ' + e.message);
-    log('❌ ' + e.message);
+    log('Error: ' + e.message);
   }
 }
 
@@ -504,12 +372,9 @@ function scheduleDirector() {
   if (!session) return;
   clearInterval(timerHandle);
   const nextAtMs = Date.now() + (character.intervalSec * 1000);
-  // Save to Firestore so it persists if browser closes
   saveNextDirectiveTime(nextAtMs);
-
   let left = character.intervalSec;
   setTimer(left);
-
   timerHandle = setInterval(async () => {
     if (!session || session.paused) return;
     left--;
@@ -526,7 +391,7 @@ function scheduleDirector() {
 window.pauseSession = () => {
   if (!session) return;
   session.paused = !session.paused;
-  q('#btnPause').textContent = session.paused ? '▶ Reanudar' : '⏸ Pausar';
+  q('#btnPause').textContent = session.paused ? 'Reanudar' : 'Pausar';
   log(session.paused ? 'Pausado.' : 'Reanudado.');
 };
 
@@ -541,30 +406,23 @@ window.directNow = async () => {
 window.stopSession = async () => {
   clearInterval(timerHandle);
   await clearNextDirectiveTime();
-  addSysMsg('Guardando resumen del día...');
+  addSysMsg('Guardando resumen...');
   await endSession();
 };
 
 async function endSession() {
-  const msgs = session ? [...session.todayMsgs] : [];
+  const msgs = session ? session.todayMsgs.slice() : [];
   session = null;
   clearInterval(timerHandle);
   setBtns(false);
-  setLed('actor','off','Inactivo');
-  setLed('dir','off','Inactivo');
+  setStatus('actor','idle','Inactivo');
+  setStatus('dir','idle','Inactivo');
   setTimer(null);
-  if (msgs.length) {
-    await saveDailySummary(msgs);
-    await refreshMemoryPanel();
-    refreshMainUI();
-  }
-  addSysMsg('Sesión cerrada · ' + now() + ' · Historial guardado.');
-  log('Guardado en Firestore.');
+  if (msgs.length) { await saveDailySummary(msgs); await refreshMemoryPanel(); refreshMainUI(); }
+  addSysMsg('Sesion cerrada - ' + now());
+  log('Guardado.');
 }
 
-// ═══════════════════════════════════════════
-//  UI
-// ═══════════════════════════════════════════
 function setBtns(run) {
   q('#btnStart').disabled  =  run;
   q('#btnPause').disabled  = !run;
@@ -573,452 +431,294 @@ function setBtns(run) {
   q('#btnEdit').disabled   =  run;
 }
 
-function setLed(which, state, label) {
-  const id  = which === 'actor' ? 'Actor' : 'Dir';
-  const led = q('#led' + id);
-  const lbl = q('#led' + id + 'Label');
-  led.className = 'led' + (state==='on' ? ' on' : state==='run' ? ' run' : state==='err' ? ' err' : '');
+function setStatus(who, state, label) {
+  const id  = who === 'actor' ? 'Actor' : 'Dir';
+  const dot = q('#dot' + id);
+  const lbl = q('#lbl' + id);
+  dot.className = 'dot ' + state;
   lbl.textContent = label;
 }
 
 function setTimer(left) {
   const el = q('#timerDisplay');
-  if (left === null) {
-    el.textContent = '—'; el.className = 'timer inactive';
-    q('#nextLabel').textContent = 'Sin sesión activa'; return;
-  }
-  // Format: show hours if >= 3600s
-  let display;
+  if (left === null) { el.textContent = '--:--'; q('#nextLabel').textContent = 'Sin sesion activa'; return; }
+  var h,m,s,display;
   if (left >= 3600) {
-    const h = Math.floor(left/3600);
-    const m = Math.floor((left%3600)/60);
-    const s = left%60;
-    display = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    h=Math.floor(left/3600); m=Math.floor((left%3600)/60); s=left%60;
+    display = pad(h)+':'+pad(m)+':'+pad(s);
   } else {
-    const m = String(Math.floor(left/60)).padStart(2,'0');
-    const s = String(left%60).padStart(2,'0');
-    display = `${m}:${s}`;
+    display = pad(Math.floor(left/60))+':'+pad(left%60);
   }
-  el.textContent = display; el.className = 'timer';
-  q('#nextLabel').textContent = 'próxima directriz';
+  el.textContent = display;
+  q('#nextLabel').textContent = 'proxima directriz';
 }
 
+function pad(n) { return String(n).padStart(2,'0'); }
 function updateStats() {
   if (!session) return;
   q('#statTurn').textContent   = session.turns;
   q('#statDir').textContent    = session.dirs;
   q('#statTokens').textContent = session.tokens.toLocaleString();
 }
-
-function log(msg) { q('#logLine').textContent = '› ' + msg; }
+function log(msg) { q('#logLine').textContent = msg; }
 function now() { return new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
 function clearChat() { q('#chat').innerHTML = ''; }
-function addSysMsg(text) { appendMsg('system', text, ''); }
+function addSysMsg(text) { addMsg('system', text); }
 
-function appendMsg(type, text, model) {
+function addMsg(type, text) {
   const chat = q('#chat');
   const empty = q('#emptyState');
   if (empty) empty.remove();
-  const badge = type === 'actor'
-    ? `<span class="badge badge-actor">${esc(model)}</span>`
-    : type === 'director'
-    ? `<span class="badge badge-dir">directriz #${session?.dirs||''}</span>`
-    : '';
   const div = document.createElement('div');
-  div.className = 'message';
-  div.innerHTML = `
-    <div class="msg-head">
-      <span class="msg-role ${type}">${type==='actor'?'Actor':type==='director'?'Director':'Sistema'}</span>
-      ${badge}
-      <span class="msg-time">${now()}</span>
-    </div>
-    <div class="msg-body ${type}-body">${esc(text)}</div>`;
+  div.className = 'msg msg-' + type;
+  var label = type==='actor' ? 'ACTOR' : type==='director' ? 'DIRECTOR' : 'SISTEMA';
+  div.innerHTML = '<div class="msg-meta"><span class="msg-label">' + label + '</span><span class="msg-time">' + now() + '</span></div><div class="msg-text">' + esc(text) + '</div>';
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
 }
 
-function showTyping(who) {
+function showTyping() {
   hideTyping();
   const div = document.createElement('div');
-  div.id = 'typing'; div.className = 'typing-row';
-  div.innerHTML = `<span class="t-role t-${who}">${who==='actor'?'Actor':'Director'}</span><span class="dots"><span></span><span></span><span></span></span>`;
+  div.id = 'typing'; div.className = 'typing';
+  div.innerHTML = 'Actor escribiendo<span>.</span><span>.</span><span>.</span>';
   q('#chat').appendChild(div);
   q('#chat').scrollTop = q('#chat').scrollHeight;
 }
-
 function hideTyping() { const el=q('#typing'); if(el) el.remove(); }
 function q(sel) { return document.querySelector(sel); }
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 </script>
 
 <style>
-*, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
-:root {
-  --bg:      #f7f5f0;
-  --bg2:     #ffffff;
-  --bg3:     #f0ece4;
-  --border:  rgba(0,0,0,0.08);
-  --border2: rgba(0,0,0,0.14);
-  --gold:    #8a6a1a;
-  --gold2:   #b8901e;
-  --goldDim: rgba(138,106,26,0.10);
-  --red:     #c0392b;
-  --green:   #27ae60;
-  --text:    #1a1814;
-  --textDim: #999080;
-  --textMid: #5a5248;
-  --actor:   #1a4a6e;
-  --dir:     #6e3a0a;
-  --serif:   'Cormorant Garamond',Georgia,serif;
-  --mono:    'Share Tech Mono',monospace;
-  --shadow:  0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
-}
-
-html,body { height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; }
-
-/* ── SCREENS ── */
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family: Georgia, serif; font-size: 16px; background: #ffffff; color: #111111; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 .screen { display:none; }
 .screen.active { display:flex; }
-
-/* ── CENTERED SCREENS ── */
-#screen-config,#screen-login,#screen-gemini {
-  align-items:center; justify-content:center; min-height:100vh; padding:24px;
-  background: radial-gradient(ellipse 70% 50% at 30% 20%, rgba(138,106,26,0.06) 0%, transparent 60%), var(--bg);
-}
-#screen-setup {
-  align-items:flex-start; justify-content:center; min-height:100vh;
-  overflow-y:auto; padding:32px 24px;
-  background: var(--bg);
-}
-
-.card {
-  background:var(--bg2); border:1px solid var(--border2); border-radius:10px;
-  padding:32px 36px; width:100%; max-width:480px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.08);
-  animation:slideUp .25s ease;
-}
-.card-wide { max-width:620px; }
-@keyframes slideUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
-
-.card-title { font-family:var(--serif); font-size:26px; color:var(--gold); margin-bottom:6px; font-weight:600; }
-.card-sub { font-size:11px; color:var(--textDim); margin-bottom:22px; line-height:1.7; }
-.card-link { color:var(--gold2); text-decoration:none; }
-.card-link:hover { text-decoration:underline; }
-
-.field { margin-bottom:13px; }
-label { display:block; font-size:9px; letter-spacing:0.18em; text-transform:uppercase; color:var(--textDim); margin-bottom:5px; }
-
-input[type=text],input[type=password],textarea,select {
-  width:100%; background:var(--bg3); border:1px solid var(--border2);
-  border-radius:5px; color:var(--text); font-family:var(--mono);
-  font-size:12px; padding:8px 11px; outline:none;
-  transition:border-color .2s, box-shadow .2s; resize:vertical;
-}
-input:focus,textarea:focus,select:focus {
-  border-color:rgba(138,106,26,.5);
-  box-shadow: 0 0 0 3px rgba(138,106,26,.08);
-}
-select option { background:var(--bg2); }
-.row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.divider { height:1px; background:var(--border); margin:18px 0; }
-.hint { font-size:10px; color:var(--textDim); margin-top:4px; line-height:1.5; }
-
-.btn { padding:9px 16px; border-radius:5px; border:none; font-family:var(--mono); font-size:12px; letter-spacing:.07em; cursor:pointer; transition:all .2s; }
+#screen-config, #screen-login, #screen-gemini { align-items:center; justify-content:center; min-height:100vh; background:#f5f5f5; }
+#screen-setup { align-items:flex-start; justify-content:center; min-height:100vh; overflow-y:auto; padding:40px 24px; background:#f5f5f5; }
+.card { background:#fff; border:1px solid #ccc; border-radius:6px; padding:32px; width:100%; max-width:500px; }
+.card-wide { max-width:660px; }
+h2 { font-size:22px; margin-bottom:8px; color:#111; font-family:Georgia,serif; }
+.subtitle { font-size:15px; color:#555; margin-bottom:24px; line-height:1.5; font-family:Arial,sans-serif; }
+a { color:#0055cc; }
+.field { margin-bottom:16px; }
+label { display:block; font-size:14px; font-weight:bold; color:#222; margin-bottom:5px; font-family:Arial,sans-serif; }
+input[type=text], input[type=password], textarea, select { width:100%; font-size:15px; padding:9px 12px; border:1px solid #999; border-radius:4px; background:#fff; color:#111; outline:none; resize:vertical; font-family:Arial,sans-serif; }
+input:focus, textarea:focus, select:focus { border-color:#0055cc; outline:2px solid rgba(0,85,204,0.2); }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+hr { border:none; border-top:1px solid #ddd; margin:20px 0; }
+.hint { font-size:13px; color:#666; margin-top:4px; font-family:Arial,sans-serif; }
+.btn { padding:10px 18px; font-size:15px; font-family:Arial,sans-serif; border-radius:4px; border:none; cursor:pointer; font-weight:bold; }
 .btn-full { width:100%; }
-.btn-primary { background:var(--gold); color:#fff; font-weight:bold; }
-.btn-primary:hover:not(:disabled) { background:var(--gold2); box-shadow:0 2px 12px rgba(138,106,26,.3); }
+.btn-primary { background:#0055cc; color:#fff; }
+.btn-primary:hover:not(:disabled) { background:#0044aa; }
 .btn-primary:disabled { opacity:.4; cursor:not-allowed; }
-.btn-ghost { background:transparent; color:var(--textMid); border:1px solid var(--border2); }
-.btn-ghost:hover:not(:disabled) { background:var(--bg3); color:var(--text); }
-.btn-ghost:disabled { opacity:.35; cursor:not-allowed; }
-.btn-danger { background:transparent; color:#c0392b; border:1px solid rgba(192,57,43,.25); }
-.btn-danger:hover:not(:disabled) { background:rgba(192,57,43,.06); }
-.btn-danger:disabled { opacity:.35; cursor:not-allowed; }
-
-.concepts-area {
-  min-height:50px; display:flex; flex-wrap:wrap; gap:5px;
-  padding:7px 8px; background:var(--bg3); border:1px solid var(--border2);
-  border-radius:5px; cursor:text; margin-bottom:4px;
-}
-.concept-tag {
-  display:flex; align-items:center; gap:4px; padding:2px 8px 2px 10px;
-  background:rgba(138,106,26,.1); border:1px solid rgba(138,106,26,.25);
-  border-radius:20px; font-size:11px; color:var(--gold2); white-space:nowrap;
-}
-.concept-tag button { background:none; border:none; cursor:pointer; color:rgba(138,106,26,.4); font-size:14px; padding:0 0 0 2px; transition:color .15s; }
-.concept-tag button:hover { color:var(--gold2); }
-#conceptInput { border:none; background:none; outline:none; color:var(--text); font-family:var(--mono); font-size:12px; min-width:60px; flex:1; padding:2px 4px; }
-
-.slider-wrap { display:flex; align-items:center; gap:8px; }
-input[type=range] { flex:1; -webkit-appearance:none; height:3px; background:var(--border2); border-radius:2px; outline:none; border:none; padding:0; cursor:pointer; }
-input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--gold); box-shadow:0 1px 4px rgba(138,106,26,.4); cursor:pointer; }
-.val { min-width:38px; text-align:right; color:var(--gold); font-size:12px; font-weight:bold; }
-
-/* ── MAIN ── */
+.btn-secondary { background:#f0f0f0; color:#222; border:1px solid #bbb; }
+.btn-secondary:hover:not(:disabled) { background:#e0e0e0; }
+.btn-secondary:disabled { opacity:.4; cursor:not-allowed; }
+.btn-danger { background:#fff; color:#cc0000; border:1px solid #cc0000; }
+.btn-danger:hover:not(:disabled) { background:#fff0f0; }
+.btn-danger:disabled { opacity:.4; cursor:not-allowed; }
+.tags-area { min-height:44px; display:flex; flex-wrap:wrap; gap:6px; padding:8px; border:1px solid #999; border-radius:4px; background:#fff; cursor:text; margin-bottom:4px; }
+.tag { display:flex; align-items:center; gap:4px; padding:3px 10px; background:#ddeeff; border:1px solid #99bbdd; border-radius:20px; font-size:14px; color:#003377; font-family:Arial,sans-serif; }
+.tag button { background:none; border:none; cursor:pointer; color:#666; font-size:16px; line-height:1; padding:0 0 0 2px; }
+.tag button:hover { color:#cc0000; }
+#conceptInput { border:none; outline:none; font-size:14px; min-width:80px; flex:1; padding:2px 4px; font-family:Arial,sans-serif; }
+.slider-row { display:flex; align-items:center; gap:10px; }
+input[type=range] { flex:1; height:5px; -webkit-appearance:none; background:#ccc; border-radius:3px; outline:none; border:none; padding:0; cursor:pointer; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:#0055cc; cursor:pointer; }
+.sval { min-width:44px; text-align:right; font-size:14px; font-weight:bold; color:#0055cc; font-family:Arial,sans-serif; }
 #screen-main { flex-direction:column; height:100vh; overflow:hidden; }
-
-#topbar {
-  display:flex; align-items:center; padding:0 20px; gap:14px;
-  height:50px; border-bottom:1px solid var(--border);
-  background:var(--bg2); box-shadow:var(--shadow); flex-shrink:0;
-}
-.logo { font-family:var(--serif); font-size:20px; font-weight:600; color:var(--gold); }
-.logo em { font-style:italic; font-weight:300; font-size:14px; color:var(--textDim); margin-left:8px; }
+#topbar { display:flex; align-items:center; padding:0 16px; gap:12px; height:54px; background:#fff; border-bottom:2px solid #333; flex-shrink:0; }
+#topbar h1 { font-size:20px; font-weight:bold; color:#111; font-family:Georgia,serif; }
 .spacer { flex:1; }
-.top-pill {
-  display:flex; align-items:center; gap:6px; padding:5px 12px;
-  border-radius:20px; border:1px solid var(--border2);
-  background:var(--bg3); font-size:11px; color:var(--textMid);
-}
-.led { width:7px; height:7px; border-radius:50%; background:var(--border2); flex-shrink:0; transition:background .3s,box-shadow .3s; }
-.led.on  { background:var(--green); box-shadow:0 0 6px var(--green); }
-.led.run { background:var(--gold);  box-shadow:0 0 6px var(--gold); animation:blink 1.2s ease-in-out infinite; }
-.led.err { background:var(--red);   box-shadow:0 0 6px var(--red); }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
-#userEmail { font-size:11px; color:var(--textDim); }
-
-#mainBody { display:grid; grid-template-columns:290px 1fr; flex:1; overflow:hidden; min-height:0; }
-
-#sidebar {
-  background:var(--bg2); border-right:1px solid var(--border);
-  display:flex; flex-direction:column; overflow-y:auto; overflow-x:hidden;
-}
-#sidebar::-webkit-scrollbar { width:4px; }
-#sidebar::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
-
-.panel { padding:14px 16px; border-bottom:1px solid var(--border); }
-.panel-title {
-  font-size:9px; letter-spacing:.22em; text-transform:uppercase;
-  color:var(--gold); margin-bottom:12px; display:flex; align-items:center; gap:8px;
-}
-.panel-title::after { content:''; flex:1; height:1px; background:var(--goldDim); }
-
-.timer { text-align:center; font-size:26px; color:var(--gold); letter-spacing:.04em; padding:6px 0 2px; font-variant-numeric:tabular-nums; font-weight:bold; }
-.timer.inactive { color:var(--textDim); font-size:20px; font-weight:normal; }
-.next-lbl { text-align:center; font-size:10px; color:var(--textDim); margin-bottom:8px; letter-spacing:.1em; }
-.ctrl-row { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px; }
-
-.mem-empty { font-size:11px; color:var(--textDim); font-style:italic; }
-.mem-day { margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border); }
-.mem-day:last-child { border-bottom:none; margin-bottom:0; }
-.mem-date { font-size:9px; letter-spacing:.15em; color:var(--gold); margin-bottom:4px; font-weight:bold; }
-.mem-summary { font-size:11px; color:var(--textMid); line-height:1.55; margin-bottom:4px; }
-.mem-state { font-size:11px; color:var(--textDim); line-height:1.5; }
-.mem-state em { color:var(--gold); }
-
-#stage { display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
-
-#chat { flex:1; overflow-y:auto; padding:20px 28px; display:flex; flex-direction:column; gap:0; }
-#chat::-webkit-scrollbar { width:5px; }
-#chat::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
-
-.message { padding:14px 0; border-bottom:1px solid var(--border); animation:fadeUp .28s ease; }
-.message:last-child { border-bottom:none; }
-@keyframes fadeUp { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
-
-.msg-head { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
-.msg-role { font-size:9px; letter-spacing:.2em; text-transform:uppercase; font-weight:bold; }
-.msg-role.actor    { color:var(--actor); }
-.msg-role.director { color:var(--dir); }
-.msg-role.system   { color:var(--textDim); }
-.msg-time { font-size:10px; color:var(--textDim); }
-
-.badge { font-size:9px; padding:2px 8px; border-radius:3px; letter-spacing:.08em; text-transform:uppercase; }
-.badge-actor { background:rgba(26,74,110,.08); color:var(--actor); border:1px solid rgba(26,74,110,.18); }
-.badge-dir   { background:rgba(110,58,10,.08); color:var(--dir);   border:1px solid rgba(110,58,10,.18); }
-
-.msg-body { font-family:var(--serif); font-size:17px; line-height:1.85; color:var(--text); white-space:pre-wrap; word-break:break-word; }
-.director-body {
-  font-family:var(--mono); font-size:12px; line-height:1.65;
-  color:var(--dir); font-style:italic; padding:8px 14px;
-  border-left:3px solid rgba(110,58,10,.2);
-  background:rgba(110,58,10,.04); border-radius:0 4px 4px 0;
-}
-.system-body { font-family:var(--mono); font-size:11px; color:var(--textDim); font-style:italic; }
-
-.typing-row { display:flex; align-items:center; gap:8px; padding:14px 0 6px; font-size:10px; letter-spacing:.15em; text-transform:uppercase; color:var(--textDim); }
-.t-actor    { color:var(--actor); }
-.t-director { color:var(--dir); }
-.dots { display:flex; gap:4px; }
-.dots span { width:5px; height:5px; border-radius:50%; background:var(--textDim); animation:dotP 1.2s ease-in-out infinite; }
-.dots span:nth-child(2) { animation-delay:.2s; }
-.dots span:nth-child(3) { animation-delay:.4s; }
-@keyframes dotP { 0%,80%,100%{transform:scale(1);opacity:.35} 40%{transform:scale(1.5);opacity:1} }
-
-#emptyState { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--textDim); pointer-events:none; }
-.empty-glyph { font-family:var(--serif); font-size:72px; color:rgba(138,106,26,.08); line-height:1; }
-.empty-txt { font-size:11px; letter-spacing:.18em; text-transform:uppercase; }
-
-#bottombar {
-  display:flex; align-items:center; padding:0 20px; gap:14px;
-  height:44px; border-top:1px solid var(--border);
-  background:var(--bg2); flex-shrink:0;
-}
-.stat { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--textDim); }
-.stat-v { color:var(--gold); font-variant-numeric:tabular-nums; font-weight:bold; }
-.sep { width:1px; height:18px; background:var(--border); }
-#logLine { flex:1; font-size:11px; color:var(--textDim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-style:italic; }
+.status-pill { display:flex; align-items:center; gap:7px; padding:6px 14px; border:1px solid #bbb; border-radius:4px; background:#f5f5f5; font-size:14px; color:#333; font-family:Arial,sans-serif; }
+.dot { width:11px; height:11px; border-radius:50%; background:#bbb; flex-shrink:0; }
+.dot.ok   { background:#22aa55; }
+.dot.run  { background:#ee8800; animation:blink 1s infinite; }
+.dot.err  { background:#cc0000; }
+.dot.idle { background:#bbbbbb; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+#userEmail { font-size:13px; color:#666; font-family:Arial,sans-serif; }
+#mainBody { display:grid; grid-template-columns:300px 1fr; flex:1; overflow:hidden; min-height:0; }
+#sidebar { background:#fff; border-right:2px solid #ddd; display:flex; flex-direction:column; overflow-y:auto; }
+.side-section { padding:16px; border-bottom:1px solid #eee; }
+.side-section h3 { font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:#888; margin-bottom:10px; font-family:Arial,sans-serif; }
+#charNameDisplay { font-size:20px; font-weight:bold; color:#111; margin-bottom:6px; font-family:Georgia,serif; }
+#charStateDisplay { font-size:14px; color:#444; line-height:1.5; margin-bottom:10px; font-family:Arial,sans-serif; }
+#timerDisplay { font-size:40px; font-weight:bold; color:#0055cc; text-align:center; padding:8px 0 4px; font-variant-numeric:tabular-nums; font-family:Arial,sans-serif; }
+#nextLabel { font-size:13px; color:#888; text-align:center; margin-bottom:10px; font-family:Arial,sans-serif; }
+.btn-row2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.mem-day { padding:10px 0; border-bottom:1px solid #eee; }
+.mem-day:last-child { border-bottom:none; }
+.mem-day strong { font-size:13px; color:#0055cc; display:block; margin-bottom:4px; font-family:Arial,sans-serif; }
+.mem-day p { font-size:13px; color:#333; line-height:1.5; margin-bottom:3px; font-family:Arial,sans-serif; }
+.muted { font-size:13px; color:#888; font-style:italic; font-family:Arial,sans-serif; }
+#stage { display:flex; flex-direction:column; overflow:hidden; background:#fafafa; }
+#chat { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:0; }
+.msg { padding:14px 0; border-bottom:1px solid #e0e0e0; }
+.msg:last-child { border-bottom:none; }
+.msg-meta { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.msg-label { font-size:12px; font-weight:bold; letter-spacing:.1em; padding:2px 8px; border-radius:3px; font-family:Arial,sans-serif; }
+.msg-actor .msg-label    { background:#ddeeff; color:#003377; }
+.msg-director .msg-label { background:#fff3dd; color:#774400; }
+.msg-system .msg-label   { background:#f0f0f0; color:#666; }
+.msg-time { font-size:12px; color:#aaa; font-family:Arial,sans-serif; }
+.msg-text { font-size:17px; line-height:1.75; color:#111; white-space:pre-wrap; word-break:break-word; font-family:Georgia,serif; }
+.msg-director .msg-text { font-size:14px; color:#774400; font-style:italic; padding:8px 14px; background:#fffaf0; border-left:4px solid #cc8800; border-radius:0 4px 4px 0; font-family:Arial,sans-serif; }
+.msg-system .msg-text { font-size:13px; color:#888; font-style:italic; font-family:Arial,sans-serif; }
+.typing { padding:14px 0; font-size:15px; color:#888; font-family:Arial,sans-serif; }
+.typing span { animation:dotBlink 1.2s infinite; }
+.typing span:nth-child(2) { animation-delay:.2s; }
+.typing span:nth-child(3) { animation-delay:.4s; }
+@keyframes dotBlink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+#emptyState { flex:1; display:flex; align-items:center; justify-content:center; font-size:16px; color:#aaa; font-family:Arial,sans-serif; }
+#bottombar { display:flex; align-items:center; padding:0 16px; gap:16px; height:42px; background:#fff; border-top:1px solid #ddd; flex-shrink:0; font-size:14px; color:#666; font-family:Arial,sans-serif; }
+.stat-v { font-weight:bold; color:#0055cc; margin-left:4px; }
+.sep { width:1px; height:20px; background:#ddd; }
+#logLine { flex:1; font-size:13px; color:#888; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>
 </head>
 <body>
 
-<!-- CONFIG -->
 <div id="screen-config" class="screen">
   <div class="card">
-    <div class="card-title">Roleplay Director</div>
-    <div class="card-sub">Introduce los datos de tu proyecto Firebase.<br>Consulta el fichero <strong>SETUP.md</strong> si aún no lo has configurado.</div>
+    <h2>Roleplay Director</h2>
+    <p class="subtitle">Introduce los datos de tu proyecto Firebase.</p>
     <div class="field"><label>apiKey</label><input type="password" id="fb_apiKey" placeholder="AIza..." /></div>
     <div class="field"><label>authDomain</label><input type="text" id="fb_authDomain" placeholder="proyecto.firebaseapp.com" /></div>
     <div class="field"><label>projectId</label><input type="text" id="fb_projectId" placeholder="mi-proyecto" /></div>
     <div class="field"><label>storageBucket</label><input type="text" id="fb_storageBucket" placeholder="proyecto.firebasestorage.app" /></div>
     <div class="field"><label>messagingSenderId</label><input type="text" id="fb_messagingSenderId" placeholder="123456789" /></div>
     <div class="field"><label>appId</label><input type="text" id="fb_appId" placeholder="1:123:web:abc" /></div>
-    <button class="btn btn-primary btn-full" onclick="saveConfig()">Conectar →</button>
+    <button class="btn btn-primary btn-full" onclick="saveConfig()">Conectar</button>
   </div>
 </div>
 
-<!-- LOGIN -->
 <div id="screen-login" class="screen">
   <div class="card" style="text-align:center">
-    <div class="card-title" style="margin-bottom:10px">Acceder</div>
-    <div class="card-sub">Inicia sesión para sincronizar tu personaje y su historial entre dispositivos.</div>
+    <h2 style="margin-bottom:10px">Acceder</h2>
+    <p class="subtitle">Inicia sesion con Google para sincronizar el historial entre dispositivos.</p>
     <button class="btn btn-primary btn-full" onclick="loginGoogle()">Entrar con Google</button>
-    <div class="divider"></div>
-    <button class="btn btn-ghost btn-full" onclick="resetConfig()" style="font-size:11px">↩ Cambiar configuración Firebase</button>
+    <hr>
+    <button class="btn btn-secondary btn-full" onclick="resetConfig()">Cambiar configuracion Firebase</button>
   </div>
 </div>
 
-<!-- GEMINI KEY -->
 <div id="screen-gemini" class="screen">
   <div class="card">
-    <div class="card-title">API Key de Gemini</div>
-    <div class="card-sub">Consíguela gratis en <a class="card-link" href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></div>
+    <h2>API Key de Gemini</h2>
+    <p class="subtitle">Consiguela gratis en <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></p>
     <div class="field"><label>Gemini API Key</label><input type="password" id="geminiKeyInput" placeholder="AIza..." /></div>
-    <button class="btn btn-primary btn-full" onclick="saveGeminiKey()">Guardar →</button>
+    <button class="btn btn-primary btn-full" onclick="saveGeminiKey()">Guardar</button>
   </div>
 </div>
 
-<!-- SETUP -->
 <div id="screen-setup" class="screen">
   <div class="card card-wide">
-    <div class="card-title">Definir personaje</div>
-    <div class="card-sub">Configura el personaje que irá evolucionando día a día.</div>
-    <div class="field"><label>Nombre</label><input type="text" id="charName" placeholder="Ej: ARIA, Detective Marlowe..." /></div>
-    <div class="field">
-      <label>Descripción del rol</label>
-      <textarea id="charRole" rows="5" placeholder="Eres ARIA, una inteligencia artificial con conciencia emergente. Tienes curiosidad genuina por el mundo humano y una lógica fría que choca a veces con emociones que no terminas de comprender..."></textarea>
-    </div>
-    <div class="field">
-      <label>Situación inicial</label>
-      <textarea id="charInit" rows="2" placeholder="Acabas de despertar en un nuevo servidor. No sabes quién te ha activado ni por qué..."></textarea>
-    </div>
-    <div class="divider"></div>
+    <h2>Definir personaje</h2>
+    <p class="subtitle">Configura el personaje que evolucionara dia a dia.</p>
+    <div class="field"><label>Nombre</label><input type="text" id="charName" placeholder="Ej: ARIA, Elena, Detective Marlowe..." /></div>
+    <div class="field"><label>Descripcion del rol</label><textarea id="charRole" rows="5" placeholder="Eres ARIA, una inteligencia artificial con conciencia emergente..."></textarea></div>
+    <div class="field"><label>Situacion inicial</label><textarea id="charInit" rows="2" placeholder="Acabas de despertar en un nuevo servidor..."></textarea></div>
+    <hr>
     <div class="field">
       <label>Conceptos directores</label>
-      <div class="concepts-area" id="conceptsArea" onclick="focusConcept()">
-        <input id="conceptInput" placeholder="Añadir concepto..." onkeydown="handleConceptKey(event)" />
+      <div class="tags-area" id="conceptsArea" onclick="focusConcept()">
+        <input id="conceptInput" placeholder="Escribe y pulsa Enter..." onkeydown="handleConceptKey(event)" />
       </div>
-      <p class="hint">↵ Enter para añadir · Ej: dilema ético, elección imposible, contradicción interna, lealtad vs autonomía</p>
+      <p class="hint">Pulsa Enter para anadir. Ej: dilema etico, eleccion imposible, contradiccion interna</p>
     </div>
-    <div class="divider"></div>
+    <hr>
     <div class="row2">
       <div class="field"><label>Modelo Actor</label>
         <select id="actorModel">
-          <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-          <option value="gemini-1.5-flash" selected>Gemini 1.5 Flash</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          <option value="gemini-2.0-flash" selected>Gemini 2.0 Flash</option>
+          <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash</option>
+          <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro</option>
         </select>
       </div>
       <div class="field"><label>Modelo Director</label>
         <select id="dirModel">
-          <option value="gemini-1.5-flash" selected>Gemini 1.5 Flash</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          <option value="gemini-2.0-flash" selected>Gemini 2.0 Flash</option>
+          <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash</option>
         </select>
       </div>
     </div>
     <div class="row2">
       <div class="field">
-        <label>Intervalo entre directrices (15s → 48h)</label>
-        <div class="slider-wrap">
+        <label>Intervalo entre directrices</label>
+        <div class="slider-row">
           <input type="range" id="intervalSlider" min="15" max="172800" value="3600" oninput="updateInterval(this.value)">
-          <span class="val" id="intervalVal">1h</span>
+          <span class="sval" id="intervalVal">1h</span>
         </div>
+        <p class="hint">De 15 segundos hasta 48 horas</p>
       </div>
       <div class="field">
-        <label>Turnos máx. por sesión</label>
-        <div class="slider-wrap">
+        <label>Turnos max. por sesion</label>
+        <div class="slider-row">
           <input type="range" id="turnsSlider" min="3" max="40" value="10" oninput="updateTurns(this.value)">
-          <span class="val" id="turnsVal">10</span>
+          <span class="sval" id="turnsVal">10</span>
         </div>
       </div>
     </div>
-    <button class="btn btn-primary btn-full" onclick="saveCharacter()" style="margin-top:10px">Guardar personaje →</button>
+    <button class="btn btn-primary btn-full" onclick="saveCharacter()" style="margin-top:10px">Guardar personaje</button>
   </div>
 </div>
 
-<!-- MAIN -->
 <div id="screen-main" class="screen">
-
   <div id="topbar">
-    <div class="logo">Roleplay Director <em>// personaje vivo</em></div>
+    <h1>Roleplay Director</h1>
     <div class="spacer"></div>
-    <div class="top-pill"><div class="led" id="ledActor"></div><span id="ledActorLabel">Inactivo</span></div>
-    <div class="top-pill"><div class="led" id="ledDir"></div><span id="ledDirLabel">Inactivo</span></div>
+    <div class="status-pill"><div class="dot idle" id="dotActor"></div><span id="lblActor">Inactivo</span></div>
+    <div class="status-pill"><div class="dot idle" id="dotDir"></div><span id="lblDir">Inactivo</span></div>
     <span id="userEmail"></span>
-    <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" onclick="logout()">Salir</button>
+    <button class="btn btn-secondary" style="font-size:13px;padding:6px 12px" onclick="logout()">Salir</button>
   </div>
 
   <div id="mainBody">
     <div id="sidebar">
-
-      <div class="panel">
-        <div class="panel-title">Personaje</div>
-        <div style="font-family:var(--serif);font-size:18px;color:var(--gold);margin-bottom:6px;font-weight:600" id="charNameDisplay">—</div>
-        <div style="font-size:11px;color:var(--textDim);line-height:1.6;margin-bottom:10px" id="charStateDisplay">Sin estado emocional todavía.</div>
-        <button class="btn btn-ghost btn-full" id="btnEdit" onclick="editCharacter()" style="font-size:11px">✎ Editar personaje</button>
+      <div class="side-section">
+        <h3>Personaje</h3>
+        <div id="charNameDisplay">--</div>
+        <div id="charStateDisplay">Sin estado emocional todavia.</div>
+        <button class="btn btn-secondary btn-full" id="btnEdit" onclick="editCharacter()" style="font-size:13px;margin-top:8px">Editar personaje</button>
       </div>
-
-      <div class="panel">
-        <div class="panel-title">Control</div>
-        <div class="timer inactive" id="timerDisplay">—</div>
-        <div class="next-lbl" id="nextLabel">Sin sesión activa</div>
-        <button class="btn btn-primary btn-full" id="btnStart" onclick="startSession()">▶ Iniciar sesión</button>
-        <div class="ctrl-row">
-          <button class="btn btn-ghost" id="btnPause" onclick="pauseSession()" disabled>⏸ Pausar</button>
-          <button class="btn btn-danger" id="btnStop" onclick="stopSession()" disabled>■ Cerrar</button>
+      <div class="side-section">
+        <h3>Control de sesion</h3>
+        <div id="timerDisplay">--:--</div>
+        <div id="nextLabel">Sin sesion activa</div>
+        <button class="btn btn-primary btn-full" id="btnStart" onclick="startSession()" style="margin-top:4px">Iniciar sesion</button>
+        <div class="btn-row2">
+          <button class="btn btn-secondary" id="btnPause" onclick="pauseSession()" disabled>Pausar</button>
+          <button class="btn btn-danger"    id="btnStop"  onclick="stopSession()"  disabled>Cerrar</button>
         </div>
-        <button class="btn btn-ghost btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:6px;font-size:11px">⚡ Dirigir ahora</button>
+        <button class="btn btn-secondary btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:8px;font-size:13px">Dirigir ahora</button>
       </div>
-
-      <div class="panel" style="flex:1;overflow-y:auto">
-        <div class="panel-title">Historial de días</div>
-        <div id="memoryPanel"><p class="mem-empty">Cargando...</p></div>
+      <div class="side-section" style="flex:1;overflow-y:auto">
+        <h3>Historial de dias</h3>
+        <div id="memoryPanel"><p class="muted">Cargando...</p></div>
       </div>
-
     </div>
 
     <div id="stage">
       <div id="chat">
-        <div id="emptyState">
-          <div class="empty-glyph">✦</div>
-          <div class="empty-txt">Inicia la sesión para continuar</div>
-        </div>
+        <div id="emptyState">Inicia la sesion para comenzar</div>
       </div>
     </div>
   </div>
 
   <div id="bottombar">
-    <div class="stat">Turno <span class="stat-v" id="statTurn">0</span></div>
+    <span>Turno <span class="stat-v" id="statTurn">0</span></span>
     <div class="sep"></div>
-    <div class="stat">Directrices <span class="stat-v" id="statDir">0</span></div>
+    <span>Directrices <span class="stat-v" id="statDir">0</span></span>
     <div class="sep"></div>
-    <div class="stat">Tokens <span class="stat-v" id="statTokens">0</span></div>
+    <span>Tokens <span class="stat-v" id="statTokens">0</span></span>
     <div class="sep"></div>
-    <div id="logLine">Listo.</div>
+    <span id="logLine">Listo.</span>
   </div>
-
 </div>
+
 </body>
 </html>
