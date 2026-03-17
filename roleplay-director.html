@@ -282,6 +282,8 @@ window.startSession = async () => {
   setBtns(true);
   clearChat();
   q('#btnStart').textContent = 'Iniciar sesion';
+  q('#userInput').disabled = false;
+  q('#btnSend').disabled = false;
   setStatus('actor', 'run', 'Iniciando...');
   setStatus('dir',   'idle', 'En espera');
 
@@ -289,6 +291,7 @@ window.startSession = async () => {
   if (existing.length) {
     addSysMsg('Retomando sesion de hoy - ' + now());
     existing.forEach(m => {
+      if (m.type==='user')     { addMsg('user', m.content); }
       if (m.type==='actor')    { addMsg('actor', m.content);    session.history.push({ role:'assistant', content:m.content }); session.turns++; }
       if (m.type==='director') { addMsg('director', m.content); session.dirs++; session.history.push({ role:'user', content:'[DIRECTOR: ' + m.content + ']' }); }
     });
@@ -420,6 +423,8 @@ async function endSession() {
   setTimer(null);
   if (msgs.length) { await saveDailySummary(msgs); await refreshMemoryPanel(); refreshMainUI(); }
   addSysMsg('Sesion cerrada - ' + now());
+  q('#userInput').disabled = true;
+  q('#btnSend').disabled = true;
   log('Guardado.');
 }
 
@@ -471,7 +476,7 @@ function addMsg(type, text) {
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'msg msg-' + type;
-  var label = type==='actor' ? 'ACTOR' : type==='director' ? 'DIRECTOR' : 'SISTEMA';
+  var label = type==='actor' ? 'ACTOR' : type==='director' ? 'DIRECTOR' : type==='user' ? 'TU' : 'SISTEMA';
   div.innerHTML = '<div class="msg-meta"><span class="msg-label">' + label + '</span><span class="msg-time">' + now() + '</span></div><div class="msg-text">' + esc(text) + '</div>';
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
@@ -485,6 +490,39 @@ function showTyping() {
   q('#chat').appendChild(div);
   q('#chat').scrollTop = q('#chat').scrollHeight;
 }
+
+window.handleUserKey = (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendUserMessage();
+  }
+};
+
+window.sendUserMessage = async () => {
+  if (!session) return;
+  const input = q('#userInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.disabled = true;
+  q('#btnSend').disabled = true;
+
+  // Show user message
+  addMsg('user', text);
+  await persistMsg('user', text, 'user');
+  session.todayMsgs.push({ type:'user', content:text });
+
+  // Add to actor history as user turn
+  session.history.push({ role:'user', content: text });
+
+  // Get actor response
+  await runActor();
+
+  input.disabled = false;
+  q('#btnSend').disabled = false;
+  input.focus();
+};
+
 function hideTyping() { const el=q('#typing'); if(el) el.remove(); }
 function q(sel) { return document.querySelector(sel); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -578,6 +616,45 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
 .stat-v { font-weight:bold; color:#0055cc; margin-left:4px; }
 .sep { width:1px; height:20px; background:#ddd; }
 #logLine { flex:1; font-size:13px; color:#888; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+#inputArea {
+  display: flex;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 2px solid #ddd;
+  background: #fff;
+  flex-shrink: 0;
+}
+#userInput {
+  flex: 1;
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  font-family: Georgia, serif;
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+}
+#userInput:focus { border-color: #0055cc; }
+#userInput:disabled { background: #f5f5f5; color: #aaa; }
+#btnSend {
+  padding: 0 24px;
+  font-size: 15px;
+  font-weight: bold;
+  background: #0055cc;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: flex-end;
+  height: 42px;
+}
+#btnSend:hover:not(:disabled) { background: #0044aa; }
+#btnSend:disabled { background: #ccc; cursor: not-allowed; }
+.msg-user .msg-label { background: #eeffee; color: #005500; }
+.msg-user .msg-text { color: #222; }
 </style>
 </head>
 <body>
@@ -701,6 +778,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div id="stage">
       <div id="chat">
         <div id="emptyState">Inicia la sesion para comenzar</div>
+      </div>
+      <div id="inputArea">
+        <textarea id="userInput" placeholder="Escribe tu mensaje... (Enter para enviar, Shift+Enter para nueva linea)" rows="2" disabled onkeydown="handleUserKey(event)"></textarea>
+        <button id="btnSend" onclick="sendUserMessage()" disabled>Enviar</button>
       </div>
     </div>
   </div>
