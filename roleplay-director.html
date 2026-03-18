@@ -455,7 +455,7 @@ window.startSession = async () => {
     session.history.push({ role:'model', content: '[El personaje espera que empieces tu.]' });
     addSysMsg('Sesion lista. Escribe para comenzar.');
   }
-  scheduleDirector();
+  await scheduleDirectorRespectingSaved();
 
   // If Elena had a pending spontaneous message, generate it now
   if (window._pendingSpontaneous) {
@@ -524,6 +524,42 @@ async function runDirector() {
     addSysMsg('Error director: ' + e.message);
     log('Error: ' + e.message);
   }
+}
+
+async function scheduleDirectorRespectingSaved() {
+  if (!session) return;
+  clearInterval(timerHandle);
+
+  const nextAt = await getNextDirectiveTime();
+  let left;
+
+  if (nextAt && nextAt > Date.now()) {
+    // Respect existing saved timer
+    left = Math.round((nextAt - Date.now()) / 1000);
+  } else if (nextAt && nextAt <= Date.now()) {
+    // Timer already expired — run director immediately
+    await clearNextDirectiveTime();
+    await runDirector();
+    if (session) scheduleDirector();
+    return;
+  } else {
+    // No saved timer — start fresh
+    left = character.intervalSec;
+    saveNextDirectiveTime(Date.now() + (character.intervalSec * 1000));
+  }
+
+  setTimer(left);
+  timerHandle = setInterval(async () => {
+    if (!session || session.paused) return;
+    left--;
+    setTimer(left);
+    if (left <= 0) {
+      clearInterval(timerHandle);
+      await clearNextDirectiveTime();
+      await runDirector();
+      if (session) scheduleDirector();
+    }
+  }, 1000);
 }
 
 function scheduleDirector() {
