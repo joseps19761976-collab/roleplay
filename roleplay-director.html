@@ -278,7 +278,7 @@ async function callGemini(model, systemPrompt, messages) {
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: messages.map(m => ({ role: m.role==='assistant'?'model':'user', parts: [{ text: m.content }] })),
-    generationConfig: { temperature: 0.9, maxOutputTokens: 1024 },
+    generationConfig: { temperature: 0.9, maxOutputTokens: 4096 },
   };
   const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
   if (!res.ok) {
@@ -358,10 +358,7 @@ async function runActor() {
     log('Turno ' + session.turns);
     await persistMsg('assistant', res.text, 'actor');
     session.todayMsgs.push({ type:'actor', content:res.text });
-    if (session.turns >= character.maxTurns) {
-      addSysMsg('Limite de turnos alcanzado. Cerrando...');
-      await endSession();
-    }
+
   } catch(e) {
     hideTyping();
     setStatus('actor','err','Error');
