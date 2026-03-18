@@ -114,6 +114,16 @@ window.handleConceptKey = (e) => {
   }
 };
 
+window.handleConceptPaste = (e) => {
+  e.preventDefault();
+  const pasted = (e.clipboardData || window.clipboardData).getData('text');
+  // Split by semicolons, commas, or newlines
+  const parts = pasted.split(/[;,\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+  parts.forEach(p => window._concepts.push(p));
+  renderConcepts();
+  e.target.value = '';
+};
+
 function renderConcepts() {
   const area = q('#conceptsArea'), input = q('#conceptInput');
   area.innerHTML = '';
@@ -523,7 +533,9 @@ async function runDirector() {
     log('Directriz #' + session.dirs);
     await persistMsg('user', res.text, 'director');
     session.todayMsgs.push({ type:'director', content:res.text });
-    session.history.push({ role:'user', content:'[DIRECTOR: ' + res.text + ']' });
+    // Inject directive as a system nudge combined with a continuation prompt
+    // so Elena responds to the USER while naturally incorporating the directive
+    session.history.push({ role:'user', content:'[INSTRUCCION INTERNA - NO MENCIONAR: ' + res.text + '. Ahora continua la conversacion con el usuario incorporando este elemento de forma natural, como si surgiera de ti misma. No respondas a esta instruccion, habla con el usuario.]' });
     await runActor();
   } catch(e) {
     setStatus('dir','err','Error');
@@ -979,7 +991,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="field">
       <label>Conceptos directores</label>
       <div class="tags-area" id="conceptsArea" onclick="focusConcept()">
-        <input id="conceptInput" placeholder="Escribe y pulsa Enter..." onkeydown="handleConceptKey(event)" />
+        <input id="conceptInput" placeholder="Escribe y pulsa Enter..." onkeydown="handleConceptKey(event)" onpaste="handleConceptPaste(event)" />
       </div>
       <p class="hint">Pulsa Enter para anadir. Ej: dilema etico, eleccion imposible, contradiccion interna</p>
     </div>
@@ -1073,6 +1085,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <span>Tokens <span class="stat-v" id="statTokens">0</span></span>
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
+    <div class="sep"></div>
+    <span style="color:#bbb;font-size:11px">v2</span>
   </div>
 </div>
 
