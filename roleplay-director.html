@@ -522,12 +522,12 @@ async function runDirector() {
 
   try {
     const res = await callGemini(character.dirModel,
-      'Eres un director creativo de narrativa interactiva. Tu unica funcion es introducir UN nuevo elemento en la escena sin romper lo que ya ocurre.',
-      [{ role:'user', content:'CONCEPTO A INTRODUCIR AHORA: ' + chosenConcept + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nGenera UNA instruccion directorial muy concreta (1-2 frases) que AÑADA este concepto a la dinamica actual de forma natural. No cambies lo que ya pasa, enriquecelo con este elemento. Solo la instruccion, sin prefijos ni explicaciones.' }]
+      'Eres un director de teatro dando instrucciones privadas AL ACTOR, no al publico. Tus instrucciones describen como debe comportarse el personaje, en tercera persona o como indicacion de actuacion. Nunca das ordenes al usuario.',
+      [{ role:'user', content:'CONCEPTO A INTRODUCIR: ' + chosenConcept + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion para el actor (1-2 frases) que le indique como incorporar el concepto "' + chosenConcept + '" en su siguiente respuesta al usuario. Usa frases como "Introduce...", "Haz que el personaje...", "Muestra...", "Elena debe...". Solo la instruccion, sin prefijos.' }]
     );
     session.tokens += res.tokens;
     session.dirs++;
-    addMsg('director', res.text);
+    addMsg('director', '[Concepto: ' + chosenConcept + '] ' + res.text);
     setStatus('dir','ok','En espera');
     updateStats();
     log('Directriz #' + session.dirs);
@@ -618,8 +618,22 @@ window.directNow = async () => {
 window.stopSession = async () => {
   clearInterval(timerHandle);
   await clearNextDirectiveTime();
-  addSysMsg('Guardando resumen...');
-  await endSession();
+  if (session && session.todayMsgs && session.todayMsgs.length > 0) {
+    addSysMsg('Guardando resumen del dia...');
+    log('Guardando...');
+    await endSession();
+  } else {
+    // No messages to summarize, just close
+    session = null;
+    setBtns(false);
+    setStatus('actor','idle','Inactivo');
+    setStatus('dir','idle','Inactivo');
+    setTimer(null);
+    q('#userInput').disabled = true;
+    q('#btnSend').disabled = true;
+    addSysMsg('Sesion cerrada.');
+    log('Cerrado.');
+  }
 };
 
 async function endSession() {
@@ -630,11 +644,24 @@ async function endSession() {
   setStatus('actor','idle','Inactivo');
   setStatus('dir','idle','Inactivo');
   setTimer(null);
-  if (msgs.length) { await saveDailySummary(msgs); await refreshMemoryPanel(); refreshMainUI(); }
-  addSysMsg('Sesion cerrada - ' + now());
   q('#userInput').disabled = true;
   q('#btnSend').disabled = true;
-  log('Guardado.');
+  if (msgs.length) {
+    try {
+      log('Guardando resumen...');
+      await saveDailySummary(msgs);
+      await refreshMemoryPanel();
+      refreshMainUI();
+      addSysMsg('Sesion cerrada · Resumen guardado - ' + now());
+      log('Resumen guardado OK.');
+    } catch(e) {
+      addSysMsg('Sesion cerrada · Error al guardar resumen: ' + e.message);
+      log('Error: ' + e.message);
+    }
+  } else {
+    addSysMsg('Sesion cerrada - ' + now());
+    log('Sin mensajes que guardar.');
+  }
 }
 
 function setBtns(run) {
@@ -643,7 +670,8 @@ function setBtns(run) {
   q('#btnStop').disabled   = !run;
   q('#btnDirNow').disabled = !run;
   q('#btnElena').disabled  = !run;
-  q('#btnEdit').disabled   =  run;
+  // btnEdit always enabled
+  // q('#btnEdit').disabled   =  run;
 }
 
 function setStatus(who, state, label) {
@@ -1086,7 +1114,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v2</span>
+    <span style="color:#bbb;font-size:11px">v4</span>
   </div>
 </div>
 
