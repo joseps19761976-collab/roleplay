@@ -684,6 +684,41 @@ function q(sel) { return document.querySelector(sel); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 
+
+window.deleteLastMessages = async () => {
+  const n = parseInt(prompt('Cuantos mensajes quieres borrar? (desde el mas reciente)', '2'));
+  if (isNaN(n) || n <= 0) return;
+  if (!confirm('Se borraran los ultimos ' + n + ' mensajes. Elena no los recordara.')) return;
+
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','desc'), limit(n)));
+  const toDelete = [];
+  snap.forEach(d => toDelete.push(d.id));
+  for (const id of toDelete) await deleteDoc(doc(db,'users',uid,'messages',id));
+
+  // Rebuild session history without those messages
+  if (session) {
+    // Remove last n non-system entries from history and chat
+    let removed = 0;
+    while (removed < n && session.history.length) {
+      session.history.pop();
+      removed++;
+    }
+    // Remove from todayMsgs too
+    session.todayMsgs = session.todayMsgs.slice(0, Math.max(0, session.todayMsgs.length - n));
+  }
+
+  // Reload chat display
+  clearChat();
+  const recent = await loadRecentMessages(20);
+  recent.forEach(m => {
+    if (m.type==='user')     addMsg('user', m.content);
+    if (m.type==='actor')    addMsg('actor', m.content);
+    if (m.type==='director') addMsg('director', m.content);
+  });
+
+  log(n + ' mensajes borrados.');
+};
+
 window.forceElena = async () => {
   if (!session) return;
   await generateSpontaneousMessage();
@@ -969,6 +1004,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
         </div>
         <button class="btn btn-secondary btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:8px;font-size:13px">Dirigir ahora</button>
         <button class="btn btn-secondary btn-full" id="btnElena" onclick="forceElena()" disabled style="margin-top:6px;font-size:13px">Elena escribe</button>
+        <button class="btn btn-danger btn-full" onclick="deleteLastMessages()" style="margin-top:6px;font-size:13px">Borrar ultimos mensajes</button>
       </div>
       <div class="side-section" style="flex:1;overflow-y:auto">
         <h3>Historial de dias</h3>
