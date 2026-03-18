@@ -90,7 +90,7 @@ async function loadAndShow() {
     refreshMainUI();
     await refreshMemoryPanel();
     showScreen('main');
-    await checkPendingDirective();
+    await autoStart();
   } else { showScreen('setup'); }
 }
 
@@ -292,12 +292,113 @@ async function callGemini(model, systemPrompt, messages) {
   };
 }
 
+
+async function autoStart() {
+  // Check if Elena has a spontaneous message pending
+  await checkSpontaneousMessage();
+  // Auto-start session
+  await window.startSession();
+}
+
+async function checkSpontaneousMessage() {
+  const snap = await getDoc(doc(db,'users',uid,'meta','spontaneous'));
+  if (!snap.exists()) return;
+  const data = snap.data();
+  if (!data.nextAt) return;
+  if (Date.now() >= data.nextAt) {
+    // Elena has a pending spontaneous message — will be generated after session loads
+    window._pendingSpontaneous = true;
+  }
+}
+
+function scheduleNextSpontaneous() {
+  // Random between 1h and 24h
+  const minMs = 1 * 60 * 60 * 1000;
+  const maxMs = 24 * 60 * 60 * 1000;
+  const randomMs = minMs + Math.random() * (maxMs - minMs);
+  const nextAt = Date.now() + randomMs;
+  const h = (randomMs / 3600000).toFixed(1);
+  setDoc(doc(db,'users',uid,'meta','spontaneous'), { nextAt });
+  log('Elena escribira espontaneamente en ' + h + 'h.');
+}
+
+async function generateSpontaneousMessage() {
+  if (!session || !character) return;
+  log('Elena tiene algo que decir...');
+
+  const tones = [
+    'Retoma la conversacion de forma natural, como si hubiera estado pensando en algo de lo que hablasteis.',
+    'Comparte un pensamiento o sensacion nueva, algo que te ha surgido mientras no hablabais.',
+    'Muestra una faceta diferente de tu personalidad. Sorprende.',
+    'Haz una pregunta que revele algo de tu estado interior actual.',
+    'Di algo breve y misterioso que invite a continuar la conversacion.',
+  ];
+  const tone = tones[Math.floor(Math.random() * tones.length)];
+  const stateCtx = character.emotionalState ? 'Tu estado emocional actual: ' + character.emotionalState + '.' : '';
+
+  const recent = session.history.slice(-4).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('
+');
+
+  try {
+    const res = await callGemini(character.actorModel, session.system,
+      [{ role:'user', content:'[INICIATIVA PROPIA] ' + stateCtx + ' ' + tone + (recent ? '
+
+Contexto reciente:
+' + recent : '') + '
+
+Escribe un mensaje espontaneo, en primera persona, sin saludos formales. Como si mandaras un mensaje despues de un tiempo de silencio.' }]
+    );
+    session.history.push({ role:'assistant', content: res.text });
+    session.tokens += res.tokens;
+    session.turns++;
+    addMsg('actor', res.text);
+    updateStats();
+    await persistMsg('assistant', res.text, 'actor');
+    session.todayMsgs.push({ type:'actor', content: res.text });
+    // Schedule next spontaneous
+    scheduleNextSpontaneous();
+  } catch(e) {
+    log('Error mensaje espontaneo: ' + e.message);
+  }
+}
+
+
+// ── AUTO-SAVE ──
+let inactivityHandle = null;
+const INACTIVITY_MS = 30 * 60 * 1000; // 30 min
+const AUTO_SAVE_MESSAGES = 20; // every 20 messages
+
+function resetInactivityTimer() {
+  clearTimeout(inactivityHandle);
+  inactivityHandle = setTimeout(async () => {
+    if (session && session.todayMsgs.length) {
+      log('30 min sin actividad. Guardando resumen...');
+      await saveDailySummary(session.todayMsgs);
+      await refreshMemoryPanel();
+      refreshMainUI();
+      log('Resumen guardado automaticamente.');
+    }
+  }, INACTIVITY_MS);
+}
+
+async function checkAutoSaveByCount() {
+  if (!session) return;
+  const newMsgs = session.todayMsgs.filter(m => m.type !== 'system').length;
+  if (newMsgs > 0 && newMsgs % AUTO_SAVE_MESSAGES === 0) {
+    log('Guardando resumen automatico (' + newMsgs + ' mensajes)...');
+    await saveDailySummary(session.todayMsgs);
+    await refreshMemoryPanel();
+    refreshMainUI();
+    log('Resumen guardado.');
+  }
+}
+
 window.startSession = async () => {
   if (!character) return;
   session = { history:[], system:'', turns:0, dirs:0, tokens:0, paused:false, todayMsgs:[] };
   setBtns(true);
   clearChat();
-  q('#btnStart').textContent = 'Iniciar sesion';
+  
   q('#userInput').disabled = false;
   q('#btnSend').disabled = false;
   setStatus('actor', 'run', 'Iniciando...');
@@ -340,6 +441,19 @@ window.startSession = async () => {
     addSysMsg('Sesion lista. Escribe para comenzar.');
   }
   scheduleDirector();
+  resetInactivityTimer();
+
+  // If Elena had a pending spontaneous message, generate it now
+  if (window._pendingSpontaneous) {
+    window._pendingSpontaneous = false;
+    await generateSpontaneousMessage();
+  }
+
+  // Schedule next spontaneous message if none pending
+  const snapS = await getDoc(doc(db,'users',uid,'meta','spontaneous'));
+  if (!snapS.exists() || !snapS.data().nextAt) {
+    scheduleNextSpontaneous();
+  }
 };
 
 async function runActor() {
@@ -530,6 +644,7 @@ window.sendUserMessage = async () => {
   const input = q('#userInput');
   const text = input.value.trim();
   if (!text) return;
+  resetInactivityTimer();
   input.value = '';
   input.disabled = true;
   q('#btnSend').disabled = true;
@@ -827,7 +942,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
         <h3>Control de sesion</h3>
         <div id="timerDisplay">--:--</div>
         <div id="nextLabel">Sin sesion activa</div>
-        <button class="btn btn-primary btn-full" id="btnStart" onclick="startSession()" style="margin-top:4px">Iniciar sesion</button>
+        <button class="btn btn-primary btn-full" id="btnStart" onclick="startSession()" style="margin-top:4px;display:none">Iniciar sesion</button>
         <div class="btn-row2">
           <button class="btn btn-secondary" id="btnPause" onclick="pauseSession()" disabled>Pausar</button>
           <button class="btn btn-danger"    id="btnStop"  onclick="stopSession()"  disabled>Cerrar</button>
