@@ -500,14 +500,20 @@ async function runDirector() {
   setStatus('dir','run','Pensando...');
   log('Generando directriz...');
 
-  const conceptList = (character.concepts && character.concepts.length) ? character.concepts.join(', ') : 'drama, tension, giro inesperado';
+  // Pick one random concept, avoiding the last used one
+  const concepts = (character.concepts && character.concepts.length) ? character.concepts : ['drama', 'tension', 'giro inesperado'];
+  let availableConcepts = concepts.filter(c => c !== session.lastConcept);
+  if (!availableConcepts.length) availableConcepts = concepts;
+  const chosenConcept = availableConcepts[Math.floor(Math.random() * availableConcepts.length)];
+  session.lastConcept = chosenConcept;
+
   const recent = session.history.slice(-6).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n\n');
-  const stateCtx = character.emotionalState ? '\nESTADO EMOCIONAL: ' + character.emotionalState + '\n' : '';
+  const stateCtx = character.emotionalState ? '\nESTADO EMOCIONAL DEL PERSONAJE: ' + character.emotionalState + '\n' : '';
 
   try {
     const res = await callGemini(character.dirModel,
-      'Eres un director creativo de narrativa interactiva de larga duracion. Introduce giros coherentes con la historia acumulada.',
-      [{ role:'user', content:'CONCEPTOS: ' + conceptList + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nGenera UNA instruccion directorial (1-2 frases) que empuje al personaje a confrontar su estado emocional. Solo la instruccion, sin prefijos.' }]
+      'Eres un director creativo de narrativa interactiva. Tu unica funcion es introducir UN nuevo elemento en la escena sin romper lo que ya ocurre.',
+      [{ role:'user', content:'CONCEPTO A INTRODUCIR AHORA: ' + chosenConcept + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nGenera UNA instruccion directorial muy concreta (1-2 frases) que AÑADA este concepto a la dinamica actual de forma natural. No cambies lo que ya pasa, enriquecelo con este elemento. Solo la instruccion, sin prefijos ni explicaciones.' }]
     );
     session.tokens += res.tokens;
     session.dirs++;
