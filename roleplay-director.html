@@ -194,6 +194,12 @@ async function loadTodayMessages() {
   const arr = []; snap.forEach(d => { const d2=d.data(); if(d2.date===todayKey()) arr.push(d2); }); return arr;
 }
 
+async function loadRecentMessages(n) {
+  // Load last N messages across all days
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','desc'), limit(n)));
+  const arr = []; snap.forEach(d => arr.push(d.data())); return arr.reverse();
+}
+
 async function refreshMemoryPanel() {
   const days = await loadRecentSummaries();
   const panel = q('#memoryPanel');
@@ -297,26 +303,38 @@ window.startSession = async () => {
   setStatus('actor', 'run', 'Iniciando...');
   setStatus('dir',   'idle', 'En espera');
 
-  const existing = await loadTodayMessages();
-  if (existing.length) {
-    addSysMsg('Retomando sesion de hoy - ' + now());
-    existing.forEach(m => {
+  // Load last 20 messages across all days for context and display
+  const recent = await loadRecentMessages(20);
+  const todayMsgs = await loadTodayMessages();
+
+  if (recent.length) {
+    // Show last 20 in chat
+    const isToday = recent.every(m => m.date === todayKey());
+    addSysMsg(isToday ? 'Retomando sesion de hoy - ' + now() : 'Cargando ultimos ' + recent.length + ' mensajes - ' + now());
+    recent.forEach(m => {
       if (m.type==='user')     { addMsg('user', m.content); }
-      if (m.type==='actor')    { addMsg('actor', m.content);    session.history.push({ role:'assistant', content:m.content }); session.turns++; }
-      if (m.type==='director') { addMsg('director', m.content); session.dirs++; session.history.push({ role:'user', content:'[DIRECTOR: ' + m.content + ']' }); }
+      if (m.type==='actor')    { addMsg('actor', m.content); }
+      if (m.type==='director') { addMsg('director', m.content); }
     });
-    session.todayMsgs = existing;
-    addSysMsg(existing.length + ' mensajes recuperados.');
+
+    // Feed last 10 into actor history for context (not all 20 to save tokens)
+    const forContext = recent.slice(-10);
+    forContext.forEach(m => {
+      if (m.type==='actor')    { session.history.push({ role:'assistant', content:m.content }); session.turns++; }
+      if (m.type==='director') { session.history.push({ role:'user', content:'[DIRECTOR: ' + m.content + ']' }); session.dirs++; }
+      if (m.type==='user')     { session.history.push({ role:'user', content:m.content }); }
+    });
+
+    session.todayMsgs = todayMsgs;
+    addSysMsg('Escribe para continuar.');
   } else {
     addSysMsg('Nueva sesion - ' + now());
+    session.todayMsgs = [];
   }
 
   session.system = await buildActorSystem();
-  if (existing.length) {
-    // Resuming - just wait for user
-    addSysMsg('Escribe para continuar.');
-  } else {
-    // New session - set the scene context but wait for user
+  if (!recent.length) {
+    // First ever session - set scene context
     session.history.push({ role:'user', content: character.initMsg || 'Comienza la escena.' });
     session.history.push({ role:'model', content: '[El personaje espera que empieces tu.]' });
     addSysMsg('Sesion lista. Escribe para comenzar.');
