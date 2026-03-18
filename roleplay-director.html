@@ -253,7 +253,15 @@ async function buildActorSystem() {
     mem += '=== FIN MEMORIA ===\n';
   }
   if (character.emotionalState) mem += '\nTU ESTADO EMOCIONAL ACTUAL: ' + character.emotionalState + '\n';
-  return character.role + '\n' + mem + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [DIRECTOR: ...], incorpóralas naturalmente sin mencionarlas.\n- Nunca rompas el personaje.';
+
+  // Current date and time context
+  const now = new Date();
+  const days = ['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+  const timeStr = now.toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit'});
+  const dateStr = days[now.getDay()] + ' ' + now.getDate() + '/' + (now.getMonth()+1) + '/' + now.getFullYear();
+  const timeCtx = '\nFECHA Y HORA ACTUAL: ' + dateStr + ', ' + timeStr + '. Ten esto en cuenta de forma natural en tus respuestas (si es de madrugada, si es fin de semana, etc.) sin mencionarlo explicitamente salvo que venga a cuento.\n';
+
+  return character.role + '\n' + mem + timeCtx + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [DIRECTOR: ...], incorpóralas naturalmente sin mencionarlas.\n- Nunca rompas el personaje.';
 }
 
 async function saveDailySummary(msgs) {
