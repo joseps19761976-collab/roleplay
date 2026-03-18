@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Roleplay Director</title>
 
+<script src="config.js"></script>
 <script type="module">
 import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, signInWithPopup, signOut, GoogleAuthProvider, onAuthStateChanged }
                            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, updateDoc,
-         collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp }
+         collection, addDoc, query, orderBy, limit, getDocs, deleteDoc, serverTimestamp }
                            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 let fbApp, auth, db, uid;
@@ -20,9 +21,18 @@ let session   = null;
 let timerHandle = null;
 
 window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('fb_cfg');
-  if (saved) { try { bootFirebase(JSON.parse(saved)); } catch(e) { showScreen('config'); } }
-  else showScreen('config');
+  // Try config.js first, then localStorage fallback
+  if (window.APP_CONFIG && window.APP_CONFIG.firebase && window.APP_CONFIG.firebase.apiKey) {
+    // Save gemini key from config if present
+    if (window.APP_CONFIG.geminiKey) {
+      localStorage.setItem('gemini_key', window.APP_CONFIG.geminiKey);
+    }
+    bootFirebase(window.APP_CONFIG.firebase);
+  } else {
+    const saved = localStorage.getItem('fb_cfg');
+    if (saved) { try { bootFirebase(JSON.parse(saved)); } catch(e) { showScreen('config'); } }
+    else showScreen('config');
+  }
 });
 
 function bootFirebase(cfg) {
@@ -35,7 +45,7 @@ function bootFirebase(cfg) {
       if (user) {
         uid = user.uid;
         q('#userEmail').textContent = user.email;
-        geminiKey = localStorage.getItem('gemini_key') || '';
+        geminiKey = (window.APP_CONFIG && window.APP_CONFIG.geminiKey) || localStorage.getItem('gemini_key') || '';
         if (!geminiKey) { showScreen('gemini'); return; }
         await loadAndShow();
       } else { showScreen('login'); }
@@ -302,13 +312,15 @@ window.startSession = async () => {
   }
 
   session.system = await buildActorSystem();
-  if (!session.history.length) {
-    session.history.push({ role:'user', content: character.initMsg || 'Comienza la escena.' });
+  if (existing.length) {
+    // Resuming - just wait for user
+    addSysMsg('Escribe para continuar.');
   } else {
-    session.history.push({ role:'user', content:'[Continua desde donde lo dejaste.]' });
+    // New session - set the scene context but wait for user
+    session.history.push({ role:'user', content: character.initMsg || 'Comienza la escena.' });
+    session.history.push({ role:'model', content: '[El personaje espera que empieces tu.]' });
+    addSysMsg('Sesion lista. Escribe para comenzar.');
   }
-
-  await runActor();
   scheduleDirector();
 };
 
@@ -526,6 +538,43 @@ window.sendUserMessage = async () => {
 function hideTyping() { const el=q('#typing'); if(el) el.remove(); }
 function q(sel) { return document.querySelector(sel); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+window.confirmReset = async () => {
+  if (!confirm('Esto borrara TODO el historial de ' + (character ? character.name : 'el personaje') + ' y empezara de cero. No hay vuelta atras.')) return;
+  if (!confirm('Seguro? Se perderan todos los dias de historial.')) return;
+
+  if (session) {
+    clearInterval(timerHandle);
+    session = null;
+    setBtns(false);
+    setStatus('actor','idle','Inactivo');
+    setStatus('dir','idle','Inactivo');
+    setTimer(null);
+    q('#userInput').disabled = true;
+    q('#btnSend').disabled = true;
+  }
+
+  log('Borrando historial...');
+
+  const msgSnap = await getDocs(query(collection(db,'users',uid,'messages')));
+  for (const d of msgSnap.docs) await deleteDoc(doc(db,'users',uid,'messages',d.id));
+
+  const sumSnap = await getDocs(query(collection(db,'users',uid,'summaries')));
+  for (const d of sumSnap.docs) await deleteDoc(doc(db,'users',uid,'summaries',d.id));
+
+  try { await deleteDoc(doc(db,'users',uid,'meta','timer')); } catch(e) {}
+
+  character.emotionalState = '';
+  character.lastSession = '';
+  await updateDoc(doc(db,'users',uid,'meta','character'), { emotionalState: '', lastSession: '' });
+
+  clearChat();
+  await refreshMemoryPanel();
+  refreshMainUI();
+  log('Personaje reiniciado.');
+  addSysMsg('Historial borrado. Puedes iniciar una nueva sesion desde cero.');
+};
+
 </script>
 
 <style>
@@ -757,6 +806,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
         <div id="charNameDisplay">--</div>
         <div id="charStateDisplay">Sin estado emocional todavia.</div>
         <button class="btn btn-secondary btn-full" id="btnEdit" onclick="editCharacter()" style="font-size:13px;margin-top:8px">Editar personaje</button>
+        <button class="btn btn-danger btn-full" onclick="confirmReset()" style="font-size:13px;margin-top:6px">Reiniciar personaje</button>
       </div>
       <div class="side-section">
         <h3>Control de sesion</h3>
