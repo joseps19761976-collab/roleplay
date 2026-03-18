@@ -181,6 +181,8 @@ async function persistMsg(role, content, type) {
   await addDoc(collection(db, 'users', uid, 'messages'), {
     role, content, type, date: todayKey(), ts: serverTimestamp(),
   });
+  // Save last activity timestamp for robust auto-save
+  await setDoc(doc(db,'users',uid,'meta','activity'), { lastMsgAt: Date.now() });
 }
 
 async function loadRecentSummaries(days) {
@@ -294,10 +296,35 @@ async function callGemini(model, systemPrompt, messages) {
 
 
 async function autoStart() {
+  // Check if we need to save a pending summary (robust, Firestore-based)
+  await checkAndSavePendingSummary();
   // Check if Elena has a spontaneous message pending
   await checkSpontaneousMessage();
   // Auto-start session
   await window.startSession();
+}
+
+async function checkAndSavePendingSummary() {
+  // If there are unsummarized messages from today and 30min have passed, save summary
+  const actSnap = await getDoc(doc(db,'users',uid,'meta','activity'));
+  if (!actSnap.exists()) return;
+  const lastMsgAt = actSnap.data().lastMsgAt || 0;
+  const thirtyMin = 30 * 60 * 1000;
+  if (Date.now() - lastMsgAt < thirtyMin) return;
+
+  // Check if summary for today already exists
+  const sumSnap = await getDoc(doc(db,'users',uid,'summaries',todayKey()));
+  if (sumSnap.exists()) return;
+
+  // Load today's messages and save summary
+  const todayMsgs = await loadTodayMessages();
+  if (!todayMsgs.length) return;
+
+  log('Guardando resumen pendiente...');
+  await saveDailySummary(todayMsgs);
+  await refreshMemoryPanel();
+  refreshMainUI();
+  log('Resumen guardado.');
 }
 
 async function checkSpontaneousMessage() {
@@ -358,23 +385,8 @@ async function generateSpontaneousMessage() {
 }
 
 
-// ── AUTO-SAVE ──
-let inactivityHandle = null;
-const INACTIVITY_MS = 30 * 60 * 1000; // 30 min
-const AUTO_SAVE_MESSAGES = 20; // every 20 messages
-
-function resetInactivityTimer() {
-  clearTimeout(inactivityHandle);
-  inactivityHandle = setTimeout(async () => {
-    if (session && session.todayMsgs.length) {
-      log('30 min sin actividad. Guardando resumen...');
-      await saveDailySummary(session.todayMsgs);
-      await refreshMemoryPanel();
-      refreshMainUI();
-      log('Resumen guardado automaticamente.');
-    }
-  }, INACTIVITY_MS);
-}
+// ── AUTO-SAVE BY COUNT ──
+const AUTO_SAVE_MESSAGES = 20;
 
 async function checkAutoSaveByCount() {
   if (!session) return;
@@ -436,7 +448,6 @@ window.startSession = async () => {
     addSysMsg('Sesion lista. Escribe para comenzar.');
   }
   scheduleDirector();
-  resetInactivityTimer();
 
   // If Elena had a pending spontaneous message, generate it now
   if (window._pendingSpontaneous) {
@@ -569,6 +580,7 @@ function setBtns(run) {
   q('#btnPause').disabled  = !run;
   q('#btnStop').disabled   = !run;
   q('#btnDirNow').disabled = !run;
+  q('#btnElena').disabled  = !run;
   q('#btnEdit').disabled   =  run;
 }
 
@@ -639,7 +651,6 @@ window.sendUserMessage = async () => {
   const input = q('#userInput');
   const text = input.value.trim();
   if (!text) return;
-  resetInactivityTimer();
   input.value = '';
   input.disabled = true;
   q('#btnSend').disabled = true;
@@ -663,6 +674,12 @@ window.sendUserMessage = async () => {
 function hideTyping() { const el=q('#typing'); if(el) el.remove(); }
 function q(sel) { return document.querySelector(sel); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+
+window.forceElena = async () => {
+  if (!session) return;
+  await generateSpontaneousMessage();
+};
 
 window.confirmReset = async () => {
   if (!confirm('Esto borrara TODO el historial de ' + (character ? character.name : 'el personaje') + ' y empezara de cero. No hay vuelta atras.')) return;
@@ -943,6 +960,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
           <button class="btn btn-danger"    id="btnStop"  onclick="stopSession()"  disabled>Cerrar</button>
         </div>
         <button class="btn btn-secondary btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:8px;font-size:13px">Dirigir ahora</button>
+        <button class="btn btn-secondary btn-full" id="btnElena" onclick="forceElena()" disabled style="margin-top:6px;font-size:13px">Elena escribe</button>
       </div>
       <div class="side-section" style="flex:1;overflow-y:auto">
         <h3>Historial de dias</h3>
