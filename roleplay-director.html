@@ -336,17 +336,12 @@ async function generateSpontaneousMessage() {
   const tone = tones[Math.floor(Math.random() * tones.length)];
   const stateCtx = character.emotionalState ? 'Tu estado emocional actual: ' + character.emotionalState + '.' : '';
 
-  const recent = session.history.slice(-4).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('
-');
+  const recent = session.history.slice(-4).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n');
 
   try {
+    const prompt = '[INICIATIVA PROPIA] ' + stateCtx + ' ' + tone + (recent ? '\n\nContexto reciente:\n' + recent : '') + '\n\nEscribe un mensaje espontaneo, en primera persona, sin saludos formales. Como si mandaras un mensaje despues de un tiempo de silencio.';
     const res = await callGemini(character.actorModel, session.system,
-      [{ role:'user', content:'[INICIATIVA PROPIA] ' + stateCtx + ' ' + tone + (recent ? '
-
-Contexto reciente:
-' + recent : '') + '
-
-Escribe un mensaje espontaneo, en primera persona, sin saludos formales. Como si mandaras un mensaje despues de un tiempo de silencio.' }]
+      [{ role:'user', content: prompt }]
     );
     session.history.push({ role:'assistant', content: res.text });
     session.tokens += res.tokens;
