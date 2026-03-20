@@ -158,6 +158,7 @@ function fillSetupForm() {
   q('#intervalVal').textContent = formatInterval(iv);
   q('#turnsSlider').value       = character.maxTurns || 10;
   q('#turnsVal').textContent    = character.maxTurns || 10;
+  q('#permanentConcept').value = character.permanentConcept || '';
   window._concepts = [...(character.concepts || [])];
   renderConcepts();
 }
@@ -173,6 +174,7 @@ window.saveCharacter = async () => {
     name, role,
     initMsg:     q('#charInit').value.trim() || 'Comienza la escena.',
     concepts:    [...window._concepts],
+    permanentConcept: q('#permanentConcept').value.trim(),
     actorModel:  q('#actorModel').value,
     dirModel:    q('#dirModel').value,
     intervalSec: parseInt(q('#intervalSlider').value),
@@ -271,7 +273,10 @@ async function buildActorSystem() {
   const dateStr = days[now.getDay()] + ' ' + now.getDate() + '/' + (now.getMonth()+1) + '/' + now.getFullYear();
   const timeCtx = '\nFECHA Y HORA ACTUAL: ' + dateStr + ', ' + timeStr + '. Ten esto en cuenta de forma natural en tus respuestas (si es de madrugada, si es fin de semana, etc.) sin mencionarlo explicitamente salvo que venga a cuento.\n';
 
-  return character.role + '\n' + mem + timeCtx + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [DIRECTOR: ...], incorpóralas naturalmente sin mencionarlas.\n- Nunca rompas el personaje.';
+  const permanentCtx = character.permanentConcept
+    ? '\nCONCEPTO PERMANENTE QUE DEBES MANTENER SIEMPRE: "' + character.permanentConcept + '". Esta dinamica debe estar presente en todo momento, de fondo o en primer plano segun la situacion.\n'
+    : '';
+  return character.role + '\n' + mem + timeCtx + permanentCtx + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [INSTRUCCION INTERNA...], ejecutalas de forma natural hablando con el usuario, sin mencionar que has recibido una instruccion.\n- Nunca rompas el personaje.';
 }
 
 async function saveDailySummary(msgs) {
@@ -510,12 +515,14 @@ async function runDirector() {
   setStatus('dir','run','Pensando...');
   log('Generando directriz...');
 
-  // Pick one random concept, avoiding the last used one
+  // Pick one rotating concept, avoiding the last used one
   const concepts = (character.concepts && character.concepts.length) ? character.concepts : ['drama', 'tension', 'giro inesperado'];
   let availableConcepts = concepts.filter(c => c !== session.lastConcept);
   if (!availableConcepts.length) availableConcepts = concepts;
-  const chosenConcept = availableConcepts[Math.floor(Math.random() * availableConcepts.length)];
-  session.lastConcept = chosenConcept;
+  const rotatingConcept = availableConcepts[Math.floor(Math.random() * availableConcepts.length)];
+  session.lastConcept = rotatingConcept;
+  const permanent = character.permanentConcept || '';
+  const chosenConcept = permanent ? permanent + ' + ' + rotatingConcept : rotatingConcept;
 
   const recent = session.history.slice(-6).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n\n');
   const stateCtx = character.emotionalState ? '\nESTADO EMOCIONAL DEL PERSONAJE: ' + character.emotionalState + '\n' : '';
@@ -523,12 +530,13 @@ async function runDirector() {
   try {
     const res = await callGemini(character.dirModel,
       'Eres un director de escenas eroticas de roleplay. Das instrucciones muy concretas y explicitas al actor sobre que accion, fantasia, orden o dinamica debe introducir en su siguiente mensaje. Las instrucciones son directas, sin metaforas, y describen exactamente que debe decir o hacer el personaje con el usuario.',
-      [{ role:'user', content:'CONCEPTO A INTRODUCIR AHORA: "' + chosenConcept + '"\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion muy concreta para Elena (1-2 frases) sobre que debe hacer o decir en su proximo mensaje basandose en el concepto "' + chosenConcept + '". La instruccion debe ser especifica y accionable: que orden dar, que fantasia describir, que dinamica introducir. Por ejemplo: "Elena debe ordenarle que se masturbe y parar justo antes del orgasmo" o "Elena debe describir en detalle como planea sodomizarle". Solo la instruccion, sin explicaciones.' }]
+      [{ role:'user', content:'CONCEPTO PERMANENTE (siempre presente): "' + permanent + '"\nCONCEPTO ROTATIVO A INTRODUCIR AHORA: "' + rotatingConcept + '"\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion muy concreta para Elena (1-2 frases). Elena debe combinar ambos conceptos: mantener el "' + permanent + '" como dinamica de fondo mientras introduce activamente "' + rotatingConcept + '" en su siguiente mensaje. La instruccion debe ser especifica y accionable. Por ejemplo: "Elena debe ordenarle que se masturbe y se detenga, mientras le describe en detalle como planea hacer cuckolding". Solo la instruccion, sin explicaciones.' }]
     );
     session.tokens += res.tokens;
     session.dirs++;
     addMsg('director', '[Concepto: ' + chosenConcept + '] ' + res.text);
     setStatus('dir','ok','En espera');
+    refreshMainUI();
     updateStats();
     log('Directriz #' + session.dirs);
     await persistMsg('user', res.text, 'director');
@@ -1017,11 +1025,16 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="field"><label>Situacion inicial</label><textarea id="charInit" rows="2" placeholder="Acabas de despertar en un nuevo servidor..."></textarea></div>
     <hr>
     <div class="field">
-      <label>Conceptos directores</label>
+      <label>Concepto permanente (siempre activo)</label>
+      <input type="text" id="permanentConcept" placeholder="Ej: Tease and denial" />
+      <p class="hint">Este concepto estara siempre presente en todas las interacciones.</p>
+    </div>
+    <div class="field">
+      <label>Conceptos rotativos (el director elige uno cada vez)</label>
       <div class="tags-area" id="conceptsArea" onclick="focusConcept()">
         <input id="conceptInput" placeholder="Escribe y pulsa Enter..." onkeydown="handleConceptKey(event)" onpaste="handleConceptPaste(event)" />
       </div>
-      <p class="hint">Pulsa Enter para anadir. Ej: dilema etico, eleccion imposible, contradiccion interna</p>
+      <p class="hint">Pulsa Enter para anadir. El director rotara entre estos combinandolos con el concepto permanente.</p>
     </div>
     <hr>
     <div class="row2">
@@ -1114,7 +1127,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v5</span>
+    <span style="color:#bbb;font-size:11px">v6</span>
   </div>
 </div>
 
