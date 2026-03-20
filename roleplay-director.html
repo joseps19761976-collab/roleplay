@@ -284,7 +284,7 @@ async function saveDailySummary(msgs) {
   const transcript = msgs.filter(m=>m.type!=='system').map(m=>'['+m.type.toUpperCase()+']: '+m.content).join('\n\n').slice(0,7000);
   const prevState = character.emotionalState || 'El personaje acaba de comenzar.';
   try {
-    const res = await callGemini('gemini-2.0-flash',
+    const res = await callGemini(character.dirModel || 'gemini-2.5-flash',
       'Eres un archivista narrativo. Resume sesiones de roleplay y actualiza el estado emocional del personaje.',
       [{ role:'user', content:'ESTADO ANTERIOR: ' + prevState + '\n\nTRANSCRIPCION (' + todayKey() + '):\n' + transcript + '\n\nResponde SOLO con JSON sin markdown:\n{"summary":"3-5 frases sobre que ocurrio.","emotionalState":"2-3 frases sobre como se siente ahora."}' }]
     );
@@ -1127,7 +1127,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v6</span>
+    <span style="color:#bbb;font-size:11px">v7</span>
   </div>
 </div>
 
