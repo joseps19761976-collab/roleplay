@@ -522,8 +522,8 @@ async function runDirector() {
 
   try {
     const res = await callGemini(character.dirModel,
-      'Eres un director de teatro dando instrucciones privadas AL ACTOR, no al publico. Tus instrucciones describen como debe comportarse el personaje, en tercera persona o como indicacion de actuacion. Nunca das ordenes al usuario.',
-      [{ role:'user', content:'CONCEPTO A INTRODUCIR: ' + chosenConcept + '\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion para el actor (1-2 frases) que le indique como incorporar el concepto "' + chosenConcept + '" en su siguiente respuesta al usuario. Usa frases como "Introduce...", "Haz que el personaje...", "Muestra...", "Elena debe...". Solo la instruccion, sin prefijos.' }]
+      'Eres un director de escenas eroticas de roleplay. Das instrucciones muy concretas y explicitas al actor sobre que accion, fantasia, orden o dinamica debe introducir en su siguiente mensaje. Las instrucciones son directas, sin metaforas, y describen exactamente que debe decir o hacer el personaje con el usuario.',
+      [{ role:'user', content:'CONCEPTO A INTRODUCIR AHORA: "' + chosenConcept + '"\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion muy concreta para Elena (1-2 frases) sobre que debe hacer o decir en su proximo mensaje basandose en el concepto "' + chosenConcept + '". La instruccion debe ser especifica y accionable: que orden dar, que fantasia describir, que dinamica introducir. Por ejemplo: "Elena debe ordenarle que se masturbe y parar justo antes del orgasmo" o "Elena debe describir en detalle como planea sodomizarle". Solo la instruccion, sin explicaciones.' }]
     );
     session.tokens += res.tokens;
     session.dirs++;
@@ -1114,7 +1114,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v4</span>
+    <span style="color:#bbb;font-size:11px">v5</span>
   </div>
 </div>
 
