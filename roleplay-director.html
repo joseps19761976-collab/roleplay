@@ -613,6 +613,7 @@ window.pauseSession = () => {
   session.paused = !session.paused;
   q('#btnPause').textContent = session.paused ? 'Reanudar' : 'Pausar';
   log(session.paused ? 'Pausado.' : 'Reanudado.');
+  q('#userInput').focus();
 };
 
 window.directNow = async () => {
@@ -621,6 +622,7 @@ window.directNow = async () => {
   await clearNextDirectiveTime();
   await runDirector();
   if (session) scheduleDirector();
+  q('#userInput').focus();
 };
 
 window.stopSession = async () => {
@@ -812,6 +814,7 @@ window.deleteLastMessages = async () => {
 window.forceElena = async () => {
   if (!session) return;
   await generateSpontaneousMessage();
+  q('#userInput').focus();
 };
 
 window.confirmReset = async () => {
@@ -1127,7 +1130,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v7</span>
+    <span style="color:#bbb;font-size:11px">v8</span>
   </div>
 </div>
 
