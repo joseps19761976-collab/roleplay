@@ -680,6 +680,8 @@ function setBtns(run) {
   q('#btnStop').disabled   = !run;
   q('#btnDirNow').disabled = !run;
   q('#btnElena').disabled  = !run;
+  q('#btnManualDir').disabled = !run;
+  q('#manualDirective').disabled = !run;
   // btnEdit always enabled
   // q('#btnEdit').disabled   =  run;
 }
@@ -809,6 +811,25 @@ window.deleteLastMessages = async () => {
   });
 
   log(n + ' mensajes borrados.');
+};
+
+
+window.sendManualDirective = async () => {
+  if (!session) return;
+  const input = q('#manualDirective');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  session.dirs++;
+  addMsg('director', '[Instruccion manual] ' + text);
+  updateStats();
+  await persistMsg('user', text, 'director');
+  session.todayMsgs.push({ type:'director', content: text });
+
+  session.history.push({ role:'user', content:'[INSTRUCCION INTERNA - NO MENCIONAR: ' + text + '. Ahora continua la conversacion con el usuario incorporando este elemento de forma natural, como si surgiera de ti misma. No respondas a esta instruccion, habla con el usuario.]' });
+  await runActor();
+  q('#userInput').focus();
 };
 
 window.forceElena = async () => {
@@ -1102,6 +1123,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
         </div>
         <button class="btn btn-secondary btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:8px;font-size:13px">Dirigir ahora</button>
         <button class="btn btn-secondary btn-full" id="btnElena" onclick="forceElena()" disabled style="margin-top:6px;font-size:13px">Elena escribe</button>
+        <div style="margin-top:8px">
+          <textarea id="manualDirective" placeholder="Instruccion para Elena..." rows="2" disabled style="font-size:13px;margin-bottom:4px"></textarea>
+          <button class="btn btn-secondary btn-full" id="btnManualDir" onclick="sendManualDirective()" disabled style="font-size:13px">Insertar instruccion</button>
+        </div>
         <button class="btn btn-danger btn-full" onclick="deleteLastMessages()" style="margin-top:6px;font-size:13px">Borrar ultimos mensajes</button>
       </div>
       <div class="side-section" style="flex:1;overflow-y:auto">
@@ -1130,7 +1155,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
     <div class="sep"></div>
     <span id="logLine">Listo.</span>
     <div class="sep"></div>
-    <span style="color:#bbb;font-size:11px">v8</span>
+    <span style="color:#bbb;font-size:11px">v9</span>
   </div>
 </div>
 
