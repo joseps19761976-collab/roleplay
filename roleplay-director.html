@@ -14,26 +14,6 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc,
          collection, addDoc, query, orderBy, limit, getDocs, deleteDoc, serverTimestamp }
                            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-
-
-// --- BLOQUE TARIAN (CONEXIÓN AL PUENTE) ---
-let tarianSocket = new WebSocket("ws://127.0.0.1:9999");
-
-tarianSocket.onopen = () => console.log(">>> Tarian vinculado al Director");
-tarianSocket.onclose = () => {
-    console.log(">>> Reconectando Tarian...");
-    setTimeout(() => { tarianSocket = new WebSocket("ws://127.0.0.1:9999"); }, 3000);
-};
-
-function vibrar(p) {
-    if (tarianSocket.readyState === 1) {
-        const cmd = [{
-            "VibrateCmd": { "Id": 1, "DeviceIndex": 0, "Speeds": [{ "Index": 0, "Speed": p }] },
-            "MessageSpecVersion": 3
-        }];
-        tarianSocket.send(JSON.stringify(cmd));
-    }
-}
 let fbApp, auth, db, uid;
 let geminiKey = '';
 let character = null;
@@ -331,21 +311,6 @@ async function callGemini(model, systemPrompt, messages) {
     throw new Error((err.error && err.error.message) || 'HTTP ' + res.status);
   }
   const data = await res.json();
-  
-  // Dentro de la función que recibe la respuesta de Gemini:
-let aiText = data.candidates[0].content.parts[0].text;
-
-// Detectar comando [VIBRA:0.X]
-const vMatch = aiText.match(/\[VIBRA:(\d+\.?\d*)\]/i);
-if (vMatch) {
-    const nivel = parseFloat(vMatch[1]);
-    vibrar(nivel);
-    // Limpiamos el comando del texto para que no se vea en el chat
-    aiText = aiText.replace(/\[VIBRA:(\d+\.?\d*)\]/i, "").trim();
-}
-
-// Aquí es donde tu código original hace el renderMsg(aiText) o guarda en Firestore
-
   return {
     text:   (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text) || '',
     tokens: (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0,
