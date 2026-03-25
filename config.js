@@ -19,6 +19,6 @@ window.APP_CONFIG = {
 
   // Tu API key de Google Gemini
   // (obtenla en aistudio.google.com/app/apikey)
-  geminiKey: "AIzaSyByfS9vhUqrfZGc6MeP2hiYC85suyN1-rU"
+  geminiKey: ""
 
 };
