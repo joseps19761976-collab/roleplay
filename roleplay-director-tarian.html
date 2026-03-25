@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roleplay Director</title>
+
+<script src="config.js"></script>
+<script type="module">
+import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, signInWithPopup, signOut, GoogleAuthProvider, onAuthStateChanged }
+                           from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, doc, getDoc, setDoc, updateDoc,
+         collection, addDoc, query, orderBy, limit, getDocs, deleteDoc, serverTimestamp }
+                           from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+let fbApp, auth, db, uid;
+let geminiKey = '';
+let character = null;
+let session   = null;
+let timerHandle = null;
+
+window.addEventListener('DOMContentLoaded', () => {
+  // Try config.js first, then localStorage fallback
+  if (window.APP_CONFIG && window.APP_CONFIG.firebase && window.APP_CONFIG.firebase.apiKey) {
+    // Save gemini key from config if present
+    if (window.APP_CONFIG.geminiKey) {
+      localStorage.setItem('gemini_key', window.APP_CONFIG.geminiKey);
+    }
+    bootFirebase(window.APP_CONFIG.firebase);
+  } else {
+    const saved = localStorage.getItem('fb_cfg');
+    if (saved) { try { bootFirebase(JSON.parse(saved)); } catch(e) { showScreen('config'); } }
+    else showScreen('config');
+  }
+});
+
+function bootFirebase(cfg) {
+  try {
+    fbApp = initializeApp(cfg);
+    auth  = getAuth(fbApp);
+    db    = getFirestore(fbApp);
+    localStorage.setItem('fb_cfg', JSON.stringify(cfg));
+    onAuthStateChanged(auth, async user => {
+      if (user) {
+        uid = user.uid;
+        q('#userEmail').textContent = user.email;
+        geminiKey = (window.APP_CONFIG && window.APP_CONFIG.geminiKey) || localStorage.getItem('gemini_key') || '';
+        if (!geminiKey) { showScreen('gemini'); return; }
+        await loadAndShow();
+      } else { showScreen('login'); }
+    });
+  } catch(e) { alert('Firebase error: ' + e.message); showScreen('config'); }
+}
+
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = q('#screen-' + name);
+  if (el) el.classList.add('active');
+}
+
+window.saveConfig = () => {
+  const cfg = {};
+  ['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId']
+    .forEach(f => { cfg[f] = q('#fb_' + f).value.trim(); });
+  if (!cfg.apiKey || !cfg.projectId) { alert('apiKey y projectId son obligatorios'); return; }
+  bootFirebase(cfg);
+};
+
+window.saveGeminiKey = () => {
+  const k = q('#geminiKeyInput').value.trim();
+  if (!k) return;
+  geminiKey = k;
+  localStorage.setItem('gemini_key', k);
+  loadAndShow();
+};
+
+window.loginGoogle = async () => {
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch(e) { alert('Login error: ' + e.message); }
+};
+window.logout = async () => { await signOut(auth); showScreen('login'); };
+window.resetConfig = () => { localStorage.removeItem('fb_cfg'); localStorage.removeItem('gemini_key'); location.reload(); };
+
+async function loadAndShow() {
+  const snap = await getDoc(doc(db, 'users', uid, 'meta', 'character'));
+  if (snap.exists()) {
+    character = snap.data();
+    fillSetupForm();
+    refreshMainUI();
+    await refreshMemoryPanel();
+    showScreen('main');
+    await autoStart();
+  } else { showScreen('setup'); }
+}
+
+function refreshMainUI() {
+  if (!character) return;
+  q('#charNameDisplay').textContent  = character.name || '—';
+  q('#charStateDisplay').textContent = character.emotionalState || 'Sin estado emocional todavía.';
+}
+
+window._concepts = [];
+window.focusConcept  = () => q('#conceptInput').focus();
+window.removeConcept = (i) => { window._concepts.splice(i,1); renderConcepts(); };
+window.handleConceptKey = (e) => {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    const v = e.target.value.trim().replace(/,$/,'');
+    if (v) { window._concepts.push(v); renderConcepts(); }
+    e.target.value = '';
+  } else if (e.key === 'Backspace' && !e.target.value && window._concepts.length) {
+    window._concepts.pop(); renderConcepts();
+  }
+};
+
+window.handleConceptPaste = (e) => {
+  e.preventDefault();
+  const pasted = (e.clipboardData || window.clipboardData).getData('text');
+  // Split by semicolons, commas, or newlines
+  const parts = pasted.split(/[;,\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+  parts.forEach(p => window._concepts.push(p));
+  renderConcepts();
+  e.target.value = '';
+};
+
+function renderConcepts() {
+  const area = q('#conceptsArea'), input = q('#conceptInput');
+  area.innerHTML = '';
+  window._concepts.forEach((c,i) => {
+    const t = document.createElement('span');
+    t.className = 'tag';
+    t.innerHTML = esc(c) + ' <button onclick="removeConcept(' + i + ')">x</button>';
+    area.appendChild(t);
+  });
+  area.appendChild(input);
+}
+
+window.updateInterval = v => { q('#intervalVal').textContent = formatInterval(parseInt(v)); };
+window.updateTurns    = v => { q('#turnsVal').textContent = v; };
+
+function formatInterval(s) {
+  if (s < 60)    return s + 's';
+  if (s < 3600)  return Math.round(s/60) + ' min';
+  if (s < 86400) return (s/3600).toFixed(1).replace('.0','') + 'h';
+  return Math.round(s/3600) + 'h';
+}
+
+function fillSetupForm() {
+  if (!character) return;
+  q('#charName').value   = character.name     || '';
+  q('#charRole').value   = character.role     || '';
+  q('#charInit').value   = character.initMsg  || '';
+  q('#actorModel').value = character.actorModel || 'gemini-2.0-flash';
+  q('#dirModel').value   = character.dirModel   || 'gemini-2.0-flash';
+  const iv = character.intervalSec || 3600;
+  q('#intervalSlider').value    = iv;
+  q('#intervalVal').textContent = formatInterval(iv);
+  q('#turnsSlider').value       = character.maxTurns || 10;
+  q('#turnsVal').textContent    = character.maxTurns || 10;
+  q('#permanentConcept').value = character.permanentConcept || '';
+  window._concepts = [...(character.concepts || [])];
+  renderConcepts();
+}
+
+window.editCharacter = () => { fillSetupForm(); showScreen('setup'); };
+
+window.saveCharacter = async () => {
+  const name = q('#charName').value.trim();
+  const role = q('#charRole').value.trim();
+  if (!name || !role) { alert('Nombre y rol son obligatorios'); return; }
+  character = {
+    ...(character || {}),
+    name, role,
+    initMsg:     q('#charInit').value.trim() || 'Comienza la escena.',
+    concepts:    [...window._concepts],
+    permanentConcept: q('#permanentConcept').value.trim(),
+    actorModel:  q('#actorModel').value,
+    dirModel:    q('#dirModel').value,
+    intervalSec: parseInt(q('#intervalSlider').value),
+    maxTurns:    parseInt(q('#turnsSlider').value),
+    createdAt:   character && character.createdAt ? character.createdAt : new Date().toISOString(),
+  };
+  await setDoc(doc(db, 'users', uid, 'meta', 'character'), character);
+  refreshMainUI();
+  await refreshMemoryPanel();
+  showScreen('main');
+};
+
+function todayKey() { return new Date().toISOString().slice(0,10); }
+
+async function persistMsg(role, content, type) {
+  await addDoc(collection(db, 'users', uid, 'messages'), {
+    role, content, type, date: todayKey(), ts: serverTimestamp(),
+  });
+  // Save last activity timestamp for robust auto-save
+  await setDoc(doc(db,'users',uid,'meta','activity'), { lastMsgAt: Date.now() });
+}
+
+async function loadRecentSummaries(days) {
+  days = days || 7;
+  const snap = await getDocs(query(collection(db,'users',uid,'summaries'), orderBy('date','desc'), limit(days)));
+  const arr = []; snap.forEach(d => arr.push(d.data())); return arr.reverse();
+}
+
+async function loadTodayMessages() {
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','asc')));
+  const arr = []; snap.forEach(d => { const d2=d.data(); if(d2.date===todayKey()) arr.push(d2); }); return arr;
+}
+
+async function loadRecentMessages(n) {
+  // Load last N messages across all days
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','desc'), limit(n)));
+  const arr = []; snap.forEach(d => arr.push(d.data())); return arr.reverse();
+}
+
+async function refreshMemoryPanel() {
+  const days = await loadRecentSummaries();
+  const panel = q('#memoryPanel');
+  if (!panel) return;
+  if (!days.length) { panel.innerHTML = '<p class="muted">Sin historial previo.</p>'; return; }
+  panel.innerHTML = days.map(d =>
+    '<div class="mem-day"><strong>' + d.date + '</strong><p>' + esc(d.summary||'') + '</p><p class="muted">Estado: ' + esc(d.emotionalState||'') + '</p></div>'
+  ).join('');
+}
+
+async function saveNextDirectiveTime(ms) {
+  await setDoc(doc(db,'users',uid,'meta','timer'), { nextDirectiveAt: ms });
+}
+async function clearNextDirectiveTime() {
+  await setDoc(doc(db,'users',uid,'meta','timer'), { nextDirectiveAt: null });
+}
+async function getNextDirectiveTime() {
+  const snap = await getDoc(doc(db,'users',uid,'meta','timer'));
+  return snap.exists() ? snap.data().nextDirectiveAt || null : null;
+}
+async function checkPendingDirective() {
+  const nextAt = await getNextDirectiveTime();
+  if (!nextAt) return;
+  const left = Math.round((nextAt - Date.now()) / 1000);
+  if (left <= 0) {
+    addSysMsg('Habia una directriz pendiente. Inicia sesion para ejecutarla.');
+    q('#btnStart').textContent = 'Iniciar (directriz pendiente)';
+  } else {
+    setTimer(left);
+    q('#nextLabel').textContent = 'proxima directriz programada';
+    startCountdown(nextAt);
+  }
+}
+function startCountdown(nextAtMs) {
+  clearInterval(timerHandle);
+  timerHandle = setInterval(() => {
+    const left = Math.round((nextAtMs - Date.now()) / 1000);
+    if (left <= 0) { clearInterval(timerHandle); setTimer(0); return; }
+    setTimer(left);
+  }, 1000);
+}
+
+async function buildActorSystem() {
+  const summaries = await loadRecentSummaries(7);
+  let mem = '';
+  if (summaries.length) {
+    mem = '\n\n=== MEMORIA DE SESIONES ANTERIORES ===\n';
+    summaries.forEach(s => { mem += '\n[' + s.date + '] ' + s.summary + ' Estado emocional: ' + s.emotionalState + '\n'; });
+    mem += '=== FIN MEMORIA ===\n';
+  }
+  if (character.emotionalState) mem += '\nTU ESTADO EMOCIONAL ACTUAL: ' + character.emotionalState + '\n';
+
+  // Current date and time context
+  const now = new Date();
+  const days = ['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+  const timeStr = now.toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit'});
+  const dateStr = days[now.getDay()] + ' ' + now.getDate() + '/' + (now.getMonth()+1) + '/' + now.getFullYear();
+  const timeCtx = '\nFECHA Y HORA ACTUAL: ' + dateStr + ', ' + timeStr + '. Ten esto en cuenta de forma natural en tus respuestas (si es de madrugada, si es fin de semana, etc.) sin mencionarlo explicitamente salvo que venga a cuento.\n';
+
+  const permanentCtx = character.permanentConcept
+    ? '\nCONCEPTO PERMANENTE QUE DEBES MANTENER SIEMPRE: "' + character.permanentConcept + '". Esta dinamica debe estar presente en todo momento, de fondo o en primer plano segun la situacion.\n'
+    : '';
+  return character.role + '\n' + mem + timeCtx + permanentCtx + '\nINSTRUCCIONES:\n- Tu actitud debe reflejar todo lo vivido en sesiones anteriores.\n- Responde en primera persona, de forma expresiva y narrativa.\n- Cuando recibas instrucciones entre corchetes [INSTRUCCION INTERNA...], ejecutalas de forma natural hablando con el usuario, sin mencionar que has recibido una instruccion.\n- Nunca rompas el personaje.\n\nCONTROL DEL DISPOSITIVO FÍSICO (Tarian):\nPuedes controlar un vibrador conectado físicamente al usuario. Para hacerlo incluye al final de tu mensaje uno de estos comandos entre corchetes:\n[tarian:edge]    → patrón edging (sube y cae justo antes del límite)\n[tarian:tease]   → pulsos cortos caóticos\n[tarian:wave]    → olas suaves\n[tarian:ruin]    → sube rápido, corte brusco, silencio\n[tarian:punish]  → intensidad mínima frustrante\n[tarian:stop]    → parar completamente\n{"tarian": 0.6}  → vibración continua al 60% (usa valores 0.1–0.9)\nÚsalos cuando sea narrativamente apropiado. No los menciones explícitamente en el texto.';
+}
+
+async function saveDailySummary(msgs) {
+  if (!msgs.length) return;
+  const transcript = msgs.filter(m=>m.type!=='system').map(m=>'['+m.type.toUpperCase()+']: '+m.content).join('\n\n').slice(0,7000);
+  const prevState = character.emotionalState || 'El personaje acaba de comenzar.';
+  try {
+    const res = await callGemini(character.dirModel || 'gemini-2.5-flash',
+      'Eres un archivista narrativo. Resume sesiones de roleplay y actualiza el estado emocional del personaje.',
+      [{ role:'user', content:'ESTADO ANTERIOR: ' + prevState + '\n\nTRANSCRIPCION (' + todayKey() + '):\n' + transcript + '\n\nResponde SOLO con JSON sin markdown:\n{"summary":"3-5 frases sobre que ocurrio.","emotionalState":"2-3 frases sobre como se siente ahora."}' }]
+    );
+    const parsed = JSON.parse(res.text.replace(/```json|```/g,'').trim());
+    await setDoc(doc(db,'users',uid,'summaries',todayKey()), {
+      date: todayKey(), summary: parsed.summary, emotionalState: parsed.emotionalState, messageCount: msgs.length,
+    });
+    character.emotionalState = parsed.emotionalState;
+    await updateDoc(doc(db,'users',uid,'meta','character'), { emotionalState: parsed.emotionalState, lastSession: todayKey() });
+    log('Resumen guardado.');
+  } catch(e) { log('Error resumen: ' + e.message); }
+}
+
+async function callGemini(model, systemPrompt, messages) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + geminiKey;
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: messages.map(m => ({ role: m.role==='assistant'?'model':'user', parts: [{ text: m.content }] })),
+    generationConfig: { temperature: 0.9, maxOutputTokens: 4096 },
+  };
+  const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const err = await res.json().catch(function(){return {};});
+    throw new Error((err.error && err.error.message) || 'HTTP ' + res.status);
+  }
+  const data = await res.json();
+  return {
+    text:   (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text) || '',
+    tokens: (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0,
+  };
+}
+
+
+async function autoStart() {
+  // Check if we need to save a pending summary (robust, Firestore-based)
+  await checkAndSavePendingSummary();
+  // Check if Elena has a spontaneous message pending
+  await checkSpontaneousMessage();
+  // Auto-start session
+  await window.startSession();
+}
+
+async function checkAndSavePendingSummary() {
+  // If there are unsummarized messages from today and 30min have passed, save summary
+  const actSnap = await getDoc(doc(db,'users',uid,'meta','activity'));
+  if (!actSnap.exists()) return;
+  const lastMsgAt = actSnap.data().lastMsgAt || 0;
+  const thirtyMin = 30 * 60 * 1000;
+  if (Date.now() - lastMsgAt < thirtyMin) return;
+
+  // Check if summary for today already exists
+  const sumSnap = await getDoc(doc(db,'users',uid,'summaries',todayKey()));
+  if (sumSnap.exists()) return;
+
+  // Load today's messages and save summary
+  const todayMsgs = await loadTodayMessages();
+  if (!todayMsgs.length) return;
+
+  log('Guardando resumen pendiente...');
+  await saveDailySummary(todayMsgs);
+  await refreshMemoryPanel();
+  refreshMainUI();
+  log('Resumen guardado.');
+}
+
+async function checkSpontaneousMessage() {
+  const snap = await getDoc(doc(db,'users',uid,'meta','spontaneous'));
+  if (!snap.exists()) return;
+  const data = snap.data();
+  if (!data.nextAt) return;
+  if (Date.now() >= data.nextAt) {
+    // Elena has a pending spontaneous message — will be generated after session loads
+    window._pendingSpontaneous = true;
+  }
+}
+
+function scheduleNextSpontaneous() {
+  // Random between 1h and 24h
+  const minMs = 1 * 60 * 60 * 1000;
+  const maxMs = 24 * 60 * 60 * 1000;
+  const randomMs = minMs + Math.random() * (maxMs - minMs);
+  const nextAt = Date.now() + randomMs;
+  const h = (randomMs / 3600000).toFixed(1);
+  setDoc(doc(db,'users',uid,'meta','spontaneous'), { nextAt });
+  log('Elena escribira espontaneamente en ' + h + 'h.');
+}
+
+async function generateSpontaneousMessage() {
+  if (!session || !character) return;
+  log('Elena tiene algo que decir...');
+
+  const tones = [
+    'Retoma la conversacion de forma natural, como si hubiera estado pensando en algo de lo que hablasteis.',
+    'Comparte un pensamiento o sensacion nueva, algo que te ha surgido mientras no hablabais.',
+    'Muestra una faceta diferente de tu personalidad. Sorprende.',
+    'Haz una pregunta que revele algo de tu estado interior actual.',
+    'Di algo breve y misterioso que invite a continuar la conversacion.',
+  ];
+  const tone = tones[Math.floor(Math.random() * tones.length)];
+  const stateCtx = character.emotionalState ? 'Tu estado emocional actual: ' + character.emotionalState + '.' : '';
+
+  const recent = session.history.slice(-4).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n');
+
+  try {
+    const prompt = '[INICIATIVA PROPIA] ' + stateCtx + ' ' + tone + (recent ? '\n\nContexto reciente:\n' + recent : '') + '\n\nEscribe un mensaje espontaneo, en primera persona, sin saludos formales. Como si mandaras un mensaje despues de un tiempo de silencio.';
+    const res = await callGemini(character.actorModel, session.system,
+      [{ role:'user', content: prompt }]
+    );
+    session.history.push({ role:'assistant', content: res.text });
+    session.tokens += res.tokens;
+    session.turns++;
+    addMsg('actor', res.text);
+    updateStats();
+    await persistMsg('assistant', res.text, 'actor');
+    session.todayMsgs.push({ type:'actor', content: res.text });
+    // Schedule next spontaneous
+    scheduleNextSpontaneous();
+  } catch(e) {
+    log('Error mensaje espontaneo: ' + e.message);
+  }
+}
+
+
+// ── AUTO-SAVE BY COUNT ──
+const AUTO_SAVE_MESSAGES = 20;
+
+async function checkAutoSaveByCount() {
+  if (!session) return;
+  const newMsgs = session.todayMsgs.filter(m => m.type !== 'system').length;
+  if (newMsgs > 0 && newMsgs % AUTO_SAVE_MESSAGES === 0) {
+    log('Guardando resumen automatico (' + newMsgs + ' mensajes)...');
+    await saveDailySummary(session.todayMsgs);
+    await refreshMemoryPanel();
+    refreshMainUI();
+    log('Resumen guardado.');
+  }
+}
+
+window.startSession = async () => {
+  if (!character) return;
+  session = { history:[], system:'', turns:0, dirs:0, tokens:0, paused:false, todayMsgs:[] };
+  setBtns(true);
+  clearChat();
+  
+  q('#userInput').disabled = false;
+  q('#btnSend').disabled = false;
+  setStatus('actor', 'run', 'Iniciando...');
+  setStatus('dir',   'idle', 'En espera');
+
+  // Load last 20 messages across all days for context and display
+  const recent = await loadRecentMessages(20);
+  const todayMsgs = await loadTodayMessages();
+
+  if (recent.length) {
+    // Show last 20 in chat
+    const isToday = recent.every(m => m.date === todayKey());
+    addSysMsg(isToday ? 'Retomando sesion de hoy - ' + now() : 'Cargando ultimos ' + recent.length + ' mensajes - ' + now());
+    recent.forEach(m => {
+      if (m.type==='user')     { addMsg('user', m.content); }
+      if (m.type==='actor')    { addMsg('actor', m.content); }
+      if (m.type==='director') { addMsg('director', m.content); }
+    });
+
+    // Feed last 10 into actor history for context (not all 20 to save tokens)
+    const forContext = recent.slice(-10);
+    forContext.forEach(m => {
+      if (m.type==='actor')    { session.history.push({ role:'assistant', content:m.content }); session.turns++; }
+      if (m.type==='director') { session.history.push({ role:'user', content:'[DIRECTOR: ' + m.content + ']' }); session.dirs++; }
+      if (m.type==='user')     { session.history.push({ role:'user', content:m.content }); }
+    });
+
+    session.todayMsgs = todayMsgs;
+    addSysMsg('Escribe para continuar.');
+  } else {
+    addSysMsg('Nueva sesion - ' + now());
+    session.todayMsgs = [];
+  }
+
+  session.system = await buildActorSystem();
+  if (!recent.length) {
+    // First ever session - set scene context
+    session.history.push({ role:'user', content: character.initMsg || 'Comienza la escena.' });
+    session.history.push({ role:'model', content: '[El personaje espera que empieces tu.]' });
+    addSysMsg('Sesion lista. Escribe para comenzar.');
+  }
+  await scheduleDirectorRespectingSaved();
+
+  // If Elena had a pending spontaneous message, generate it now
+  if (window._pendingSpontaneous) {
+    window._pendingSpontaneous = false;
+    await generateSpontaneousMessage();
+  }
+
+  // Schedule next spontaneous message if none pending
+  const snapS = await getDoc(doc(db,'users',uid,'meta','spontaneous'));
+  if (!snapS.exists() || !snapS.data().nextAt) {
+    scheduleNextSpontaneous();
+  }
+};
+
+async function runActor() {
+  if (!session) return;
+  setStatus('actor','run','Escribiendo...');
+  showTyping();
+  try {
+    const res = await callGemini(character.actorModel, session.system, session.history);
+    hideTyping();
+    session.history.push({ role:'assistant', content:res.text });
+    session.tokens += res.tokens;
+    session.turns++;
+    addMsg('actor', res.text);
+    setStatus('actor','ok','Listo');
+    updateStats();
+    log('Turno ' + session.turns);
+    await persistMsg('assistant', res.text, 'actor');
+    session.todayMsgs.push({ type:'actor', content:res.text });
+    // ── TARIAN HOOK ──
+    if (window.tarianParseAndExecute) window.tarianParseAndExecute(res.text);
+  } catch(e) {
+    hideTyping();
+    setStatus('actor','err','Error');
+    addSysMsg('Error actor: ' + e.message);
+    log('Error: ' + e.message);
+  }
+}
+
+async function runDirector() {
+  if (!session || session.paused) return;
+  setStatus('dir','run','Pensando...');
+  log('Generando directriz...');
+
+  // Pick one rotating concept, avoiding the last used one
+  const concepts = (character.concepts && character.concepts.length) ? character.concepts : ['drama', 'tension', 'giro inesperado'];
+  let availableConcepts = concepts.filter(c => c !== session.lastConcept);
+  if (!availableConcepts.length) availableConcepts = concepts;
+  const rotatingConcept = availableConcepts[Math.floor(Math.random() * availableConcepts.length)];
+  session.lastConcept = rotatingConcept;
+  const permanent = character.permanentConcept || '';
+  const chosenConcept = permanent ? permanent + ' + ' + rotatingConcept : rotatingConcept;
+
+  const recent = session.history.slice(-6).map(m => (m.role==='user'?'PROMPT':'ACTOR') + ': ' + m.content).join('\n\n');
+  const stateCtx = character.emotionalState ? '\nESTADO EMOCIONAL DEL PERSONAJE: ' + character.emotionalState + '\n' : '';
+
+  try {
+    const res = await callGemini(character.dirModel,
+      'Eres un director de escenas eroticas de roleplay. Das instrucciones muy concretas y explicitas al actor sobre que accion, fantasia, orden o dinamica debe introducir en su siguiente mensaje. Las instrucciones son directas, sin metaforas, y describen exactamente que debe decir o hacer el personaje con el usuario.',
+      [{ role:'user', content:'CONCEPTO PERMANENTE (siempre presente): "' + permanent + '"\nCONCEPTO ROTATIVO A INTRODUCIR AHORA: "' + rotatingConcept + '"\n' + stateCtx + '\nESCENA RECIENTE:\n' + recent + '\n\nEscribe UNA instruccion muy concreta para Elena (1-2 frases). Elena debe combinar ambos conceptos: mantener el "' + permanent + '" como dinamica de fondo mientras introduce activamente "' + rotatingConcept + '" en su siguiente mensaje. La instruccion debe ser especifica y accionable. Por ejemplo: "Elena debe ordenarle que se masturbe y se detenga, mientras le describe en detalle como planea hacer cuckolding". Solo la instruccion, sin explicaciones.' }]
+    );
+    session.tokens += res.tokens;
+    session.dirs++;
+    addMsg('director', '[Concepto: ' + chosenConcept + '] ' + res.text);
+    setStatus('dir','ok','En espera');
+    refreshMainUI();
+    updateStats();
+    log('Directriz #' + session.dirs);
+    await persistMsg('user', res.text, 'director');
+    session.todayMsgs.push({ type:'director', content:res.text });
+    // Inject directive as a system nudge combined with a continuation prompt
+    // so Elena responds to the USER while naturally incorporating the directive
+    session.history.push({ role:'user', content:'[INSTRUCCION INTERNA - NO MENCIONAR: ' + res.text + '. Ahora continua la conversacion con el usuario incorporando este elemento de forma natural, como si surgiera de ti misma. No respondas a esta instruccion, habla con el usuario.]' });
+    await runActor();
+  } catch(e) {
+    setStatus('dir','err','Error');
+    addSysMsg('Error director: ' + e.message);
+    log('Error: ' + e.message);
+  }
+}
+
+async function scheduleDirectorRespectingSaved() {
+  if (!session) return;
+  clearInterval(timerHandle);
+
+  const nextAt = await getNextDirectiveTime();
+  let left;
+
+  if (nextAt && nextAt > Date.now()) {
+    // Respect existing saved timer
+    left = Math.round((nextAt - Date.now()) / 1000);
+  } else if (nextAt && nextAt <= Date.now()) {
+    // Timer already expired — run director immediately
+    await clearNextDirectiveTime();
+    await runDirector();
+    if (session) scheduleDirector();
+    return;
+  } else {
+    // No saved timer — start fresh
+    left = character.intervalSec;
+    saveNextDirectiveTime(Date.now() + (character.intervalSec * 1000));
+  }
+
+  setTimer(left);
+  timerHandle = setInterval(async () => {
+    if (!session || session.paused) return;
+    left--;
+    setTimer(left);
+    if (left <= 0) {
+      clearInterval(timerHandle);
+      await clearNextDirectiveTime();
+      await runDirector();
+      if (session) scheduleDirector();
+    }
+  }, 1000);
+}
+
+function scheduleDirector() {
+  if (!session) return;
+  clearInterval(timerHandle);
+  const nextAtMs = Date.now() + (character.intervalSec * 1000);
+  saveNextDirectiveTime(nextAtMs);
+  let left = character.intervalSec;
+  setTimer(left);
+  timerHandle = setInterval(async () => {
+    if (!session || session.paused) return;
+    left--;
+    setTimer(left);
+    if (left <= 0) {
+      clearInterval(timerHandle);
+      await clearNextDirectiveTime();
+      await runDirector();
+      if (session) scheduleDirector();
+    }
+  }, 1000);
+}
+
+window.pauseSession = () => {
+  if (!session) return;
+  session.paused = !session.paused;
+  q('#btnPause').textContent = session.paused ? 'Reanudar' : 'Pausar';
+  log(session.paused ? 'Pausado.' : 'Reanudado.');
+  q('#userInput').focus();
+};
+
+window.directNow = async () => {
+  if (!session || session.paused) return;
+  clearInterval(timerHandle);
+  await clearNextDirectiveTime();
+  await runDirector();
+  if (session) scheduleDirector();
+  q('#userInput').focus();
+};
+
+window.stopSession = async () => {
+  clearInterval(timerHandle);
+  await clearNextDirectiveTime();
+  if (session && session.todayMsgs && session.todayMsgs.length > 0) {
+    addSysMsg('Guardando resumen del dia...');
+    log('Guardando...');
+    await endSession();
+  } else {
+    // No messages to summarize, just close
+    session = null;
+    setBtns(false);
+    setStatus('actor','idle','Inactivo');
+    setStatus('dir','idle','Inactivo');
+    setTimer(null);
+    q('#userInput').disabled = true;
+    q('#btnSend').disabled = true;
+    addSysMsg('Sesion cerrada.');
+    log('Cerrado.');
+  }
+};
+
+async function endSession() {
+  const msgs = session ? session.todayMsgs.slice() : [];
+  session = null;
+  clearInterval(timerHandle);
+  setBtns(false);
+  setStatus('actor','idle','Inactivo');
+  setStatus('dir','idle','Inactivo');
+  setTimer(null);
+  q('#userInput').disabled = true;
+  q('#btnSend').disabled = true;
+  if (msgs.length) {
+    try {
+      log('Guardando resumen...');
+      await saveDailySummary(msgs);
+      await refreshMemoryPanel();
+      refreshMainUI();
+      addSysMsg('Sesion cerrada · Resumen guardado - ' + now());
+      log('Resumen guardado OK.');
+    } catch(e) {
+      addSysMsg('Sesion cerrada · Error al guardar resumen: ' + e.message);
+      log('Error: ' + e.message);
+    }
+  } else {
+    addSysMsg('Sesion cerrada - ' + now());
+    log('Sin mensajes que guardar.');
+  }
+}
+
+function setBtns(run) {
+  q('#btnStart').disabled  =  run;
+  q('#btnPause').disabled  = !run;
+  q('#btnStop').disabled   = !run;
+  q('#btnDirNow').disabled = !run;
+  q('#btnElena').disabled  = !run;
+  q('#btnManualDir').disabled = !run;
+  q('#manualDirective').disabled = !run;
+  // btnEdit always enabled
+  // q('#btnEdit').disabled   =  run;
+}
+
+function setStatus(who, state, label) {
+  const id  = who === 'actor' ? 'Actor' : 'Dir';
+  const dot = q('#dot' + id);
+  const lbl = q('#lbl' + id);
+  dot.className = 'dot ' + state;
+  lbl.textContent = label;
+}
+
+function setTimer(left) {
+  const el = q('#timerDisplay');
+  if (left === null) { el.textContent = '--:--'; q('#nextLabel').textContent = 'Sin sesion activa'; return; }
+  var h,m,s,display;
+  if (left >= 3600) {
+    h=Math.floor(left/3600); m=Math.floor((left%3600)/60); s=left%60;
+    display = pad(h)+':'+pad(m)+':'+pad(s);
+  } else {
+    display = pad(Math.floor(left/60))+':'+pad(left%60);
+  }
+  el.textContent = display;
+  q('#nextLabel').textContent = 'proxima directriz';
+}
+
+function pad(n) { return String(n).padStart(2,'0'); }
+function updateStats() {
+  if (!session) return;
+  q('#statTurn').textContent   = session.turns;
+  q('#statDir').textContent    = session.dirs;
+  q('#statTokens').textContent = session.tokens.toLocaleString();
+}
+function log(msg) { q('#logLine').textContent = msg; }
+function now() { return new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+function clearChat() { q('#chat').innerHTML = ''; }
+function addSysMsg(text) { addMsg('system', text); }
+
+function addMsg(type, text) {
+  const chat = q('#chat');
+  const empty = q('#emptyState');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'msg msg-' + type;
+  var label = type==='actor' ? 'ACTOR' : type==='director' ? 'DIRECTOR' : type==='user' ? 'TU' : 'SISTEMA';
+  div.innerHTML = '<div class="msg-meta"><span class="msg-label">' + label + '</span><span class="msg-time">' + now() + '</span></div><div class="msg-text">' + esc(text) + '</div>';
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showTyping() {
+  hideTyping();
+  const div = document.createElement('div');
+  div.id = 'typing'; div.className = 'typing';
+  div.innerHTML = 'Actor escribiendo<span>.</span><span>.</span><span>.</span>';
+  q('#chat').appendChild(div);
+  q('#chat').scrollTop = q('#chat').scrollHeight;
+}
+
+window.handleUserKey = (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendUserMessage();
+  }
+};
+
+window.sendUserMessage = async () => {
+  if (!session) return;
+  const input = q('#userInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.disabled = true;
+  q('#btnSend').disabled = true;
+
+  // Show user message
+  addMsg('user', text);
+  await persistMsg('user', text, 'user');
+  session.todayMsgs.push({ type:'user', content:text });
+
+  // Add to actor history as user turn
+  session.history.push({ role:'user', content: text });
+
+  // Get actor response
+  await runActor();
+
+  input.disabled = false;
+  q('#btnSend').disabled = false;
+  input.focus();
+};
+
+function hideTyping() { const el=q('#typing'); if(el) el.remove(); }
+function q(sel) { return document.querySelector(sel); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+
+
+window.deleteLastMessages = async () => {
+  const n = parseInt(prompt('Cuantos mensajes quieres borrar? (desde el mas reciente)', '2'));
+  if (isNaN(n) || n <= 0) return;
+  if (!confirm('Se borraran los ultimos ' + n + ' mensajes. Elena no los recordara.')) return;
+
+  const snap = await getDocs(query(collection(db,'users',uid,'messages'), orderBy('ts','desc'), limit(n)));
+  const toDelete = [];
+  snap.forEach(d => toDelete.push(d.id));
+  for (const id of toDelete) await deleteDoc(doc(db,'users',uid,'messages',id));
+
+  // Rebuild session history without those messages
+  if (session) {
+    // Remove last n non-system entries from history and chat
+    let removed = 0;
+    while (removed < n && session.history.length) {
+      session.history.pop();
+      removed++;
+    }
+    // Remove from todayMsgs too
+    session.todayMsgs = session.todayMsgs.slice(0, Math.max(0, session.todayMsgs.length - n));
+  }
+
+  // Reload chat display
+  clearChat();
+  const recent = await loadRecentMessages(20);
+  recent.forEach(m => {
+    if (m.type==='user')     addMsg('user', m.content);
+    if (m.type==='actor')    addMsg('actor', m.content);
+    if (m.type==='director') addMsg('director', m.content);
+  });
+
+  log(n + ' mensajes borrados.');
+};
+
+
+window.sendManualDirective = async () => {
+  if (!session) return;
+  const input = q('#manualDirective');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  session.dirs++;
+  addMsg('director', '[Instruccion manual] ' + text);
+  updateStats();
+  await persistMsg('user', text, 'director');
+  session.todayMsgs.push({ type:'director', content: text });
+
+  session.history.push({ role:'user', content:'[INSTRUCCION INTERNA - NO MENCIONAR: ' + text + '. Ahora continua la conversacion con el usuario incorporando este elemento de forma natural, como si surgiera de ti misma. No respondas a esta instruccion, habla con el usuario.]' });
+  await runActor();
+  q('#userInput').focus();
+};
+
+window.forceElena = async () => {
+  if (!session) return;
+  await generateSpontaneousMessage();
+  q('#userInput').focus();
+};
+
+window.confirmReset = async () => {
+  if (!confirm('Esto borrara TODO el historial de ' + (character ? character.name : 'el personaje') + ' y empezara de cero. No hay vuelta atras.')) return;
+  if (!confirm('Seguro? Se perderan todos los dias de historial.')) return;
+
+  if (session) {
+    clearInterval(timerHandle);
+    session = null;
+    setBtns(false);
+    setStatus('actor','idle','Inactivo');
+    setStatus('dir','idle','Inactivo');
+    setTimer(null);
+    q('#userInput').disabled = true;
+    q('#btnSend').disabled = true;
+  }
+
+  log('Borrando historial...');
+
+  const msgSnap = await getDocs(query(collection(db,'users',uid,'messages')));
+  for (const d of msgSnap.docs) await deleteDoc(doc(db,'users',uid,'messages',d.id));
+
+  const sumSnap = await getDocs(query(collection(db,'users',uid,'summaries')));
+  for (const d of sumSnap.docs) await deleteDoc(doc(db,'users',uid,'summaries',d.id));
+
+  try { await deleteDoc(doc(db,'users',uid,'meta','timer')); } catch(e) {}
+
+  character.emotionalState = '';
+  character.lastSession = '';
+  await updateDoc(doc(db,'users',uid,'meta','character'), { emotionalState: '', lastSession: '' });
+
+  clearChat();
+  await refreshMemoryPanel();
+  refreshMainUI();
+  log('Personaje reiniciado.');
+  addSysMsg('Historial borrado. Puedes iniciar una nueva sesion desde cero.');
+};
+
+</script>
+
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family: Georgia, serif; font-size: 16px; background: #ffffff; color: #111111; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.screen { display:none; }
+.screen.active { display:flex; }
+#screen-config, #screen-login, #screen-gemini { align-items:center; justify-content:center; min-height:100vh; background:#f5f5f5; }
+#screen-setup { align-items:flex-start; justify-content:center; min-height:100vh; overflow-y:auto; padding:40px 24px; background:#f5f5f5; }
+.card { background:#fff; border:1px solid #ccc; border-radius:6px; padding:32px; width:100%; max-width:500px; }
+.card-wide { max-width:660px; }
+h2 { font-size:22px; margin-bottom:8px; color:#111; font-family:Georgia,serif; }
+.subtitle { font-size:15px; color:#555; margin-bottom:24px; line-height:1.5; font-family:Arial,sans-serif; }
+a { color:#0055cc; }
+.field { margin-bottom:16px; }
+label { display:block; font-size:14px; font-weight:bold; color:#222; margin-bottom:5px; font-family:Arial,sans-serif; }
+input[type=text], input[type=password], textarea, select { width:100%; font-size:15px; padding:9px 12px; border:1px solid #999; border-radius:4px; background:#fff; color:#111; outline:none; resize:vertical; font-family:Arial,sans-serif; }
+input:focus, textarea:focus, select:focus { border-color:#0055cc; outline:2px solid rgba(0,85,204,0.2); }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+hr { border:none; border-top:1px solid #ddd; margin:20px 0; }
+.hint { font-size:13px; color:#666; margin-top:4px; font-family:Arial,sans-serif; }
+.btn { padding:10px 18px; font-size:15px; font-family:Arial,sans-serif; border-radius:4px; border:none; cursor:pointer; font-weight:bold; }
+.btn-full { width:100%; }
+.btn-primary { background:#0055cc; color:#fff; }
+.btn-primary:hover:not(:disabled) { background:#0044aa; }
+.btn-primary:disabled { opacity:.4; cursor:not-allowed; }
+.btn-secondary { background:#f0f0f0; color:#222; border:1px solid #bbb; }
+.btn-secondary:hover:not(:disabled) { background:#e0e0e0; }
+.btn-secondary:disabled { opacity:.4; cursor:not-allowed; }
+.btn-danger { background:#fff; color:#cc0000; border:1px solid #cc0000; }
+.btn-danger:hover:not(:disabled) { background:#fff0f0; }
+.btn-danger:disabled { opacity:.4; cursor:not-allowed; }
+.tags-area { min-height:44px; display:flex; flex-wrap:wrap; gap:6px; padding:8px; border:1px solid #999; border-radius:4px; background:#fff; cursor:text; margin-bottom:4px; }
+.tag { display:flex; align-items:center; gap:4px; padding:3px 10px; background:#ddeeff; border:1px solid #99bbdd; border-radius:20px; font-size:14px; color:#003377; font-family:Arial,sans-serif; }
+.tag button { background:none; border:none; cursor:pointer; color:#666; font-size:16px; line-height:1; padding:0 0 0 2px; }
+.tag button:hover { color:#cc0000; }
+#conceptInput { border:none; outline:none; font-size:14px; min-width:80px; flex:1; padding:2px 4px; font-family:Arial,sans-serif; }
+.slider-row { display:flex; align-items:center; gap:10px; }
+input[type=range] { flex:1; height:5px; -webkit-appearance:none; background:#ccc; border-radius:3px; outline:none; border:none; padding:0; cursor:pointer; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:#0055cc; cursor:pointer; }
+.sval { min-width:44px; text-align:right; font-size:14px; font-weight:bold; color:#0055cc; font-family:Arial,sans-serif; }
+#screen-main { flex-direction:column; height:100vh; overflow:hidden; }
+#topbar { display:flex; align-items:center; padding:0 16px; gap:12px; height:54px; background:#fff; border-bottom:2px solid #333; flex-shrink:0; }
+#topbar h1 { font-size:20px; font-weight:bold; color:#111; font-family:Georgia,serif; }
+.spacer { flex:1; }
+.status-pill { display:flex; align-items:center; gap:7px; padding:6px 14px; border:1px solid #bbb; border-radius:4px; background:#f5f5f5; font-size:14px; color:#333; font-family:Arial,sans-serif; }
+.dot { width:11px; height:11px; border-radius:50%; background:#bbb; flex-shrink:0; }
+.dot.ok   { background:#22aa55; }
+.dot.run  { background:#ee8800; animation:blink 1s infinite; }
+.dot.err  { background:#cc0000; }
+.dot.idle { background:#bbbbbb; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+#userEmail { font-size:13px; color:#666; font-family:Arial,sans-serif; }
+#mainBody { display:grid; grid-template-columns:300px 1fr; flex:1; overflow:hidden; min-height:0; }
+#sidebar { background:#fff; border-right:2px solid #ddd; display:flex; flex-direction:column; overflow-y:auto; }
+.side-section { padding:16px; border-bottom:1px solid #eee; }
+.side-section h3 { font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:#888; margin-bottom:10px; font-family:Arial,sans-serif; }
+#charNameDisplay { font-size:20px; font-weight:bold; color:#111; margin-bottom:6px; font-family:Georgia,serif; }
+#charStateDisplay { font-size:14px; color:#444; line-height:1.5; margin-bottom:10px; font-family:Arial,sans-serif; }
+#timerDisplay { font-size:40px; font-weight:bold; color:#0055cc; text-align:center; padding:8px 0 4px; font-variant-numeric:tabular-nums; font-family:Arial,sans-serif; }
+#nextLabel { font-size:13px; color:#888; text-align:center; margin-bottom:10px; font-family:Arial,sans-serif; }
+.btn-row2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.mem-day { padding:10px 0; border-bottom:1px solid #eee; }
+.mem-day:last-child { border-bottom:none; }
+.mem-day strong { font-size:13px; color:#0055cc; display:block; margin-bottom:4px; font-family:Arial,sans-serif; }
+.mem-day p { font-size:13px; color:#333; line-height:1.5; margin-bottom:3px; font-family:Arial,sans-serif; }
+.muted { font-size:13px; color:#888; font-style:italic; font-family:Arial,sans-serif; }
+#stage { display:flex; flex-direction:column; overflow:hidden; background:#fafafa; }
+#chat { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:0; }
+.msg { padding:14px 0; border-bottom:1px solid #e0e0e0; }
+.msg:last-child { border-bottom:none; }
+.msg-meta { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.msg-label { font-size:12px; font-weight:bold; letter-spacing:.1em; padding:2px 8px; border-radius:3px; font-family:Arial,sans-serif; }
+.msg-actor .msg-label    { background:#ddeeff; color:#003377; }
+.msg-director .msg-label { background:#fff3dd; color:#774400; }
+.msg-system .msg-label   { background:#f0f0f0; color:#666; }
+.msg-time { font-size:12px; color:#aaa; font-family:Arial,sans-serif; }
+.msg-text { font-size:17px; line-height:1.75; color:#111; white-space:pre-wrap; word-break:break-word; font-family:Georgia,serif; }
+.msg-director .msg-text { font-size:14px; color:#774400; font-style:italic; padding:8px 14px; background:#fffaf0; border-left:4px solid #cc8800; border-radius:0 4px 4px 0; font-family:Arial,sans-serif; }
+.msg-system .msg-text { font-size:13px; color:#888; font-style:italic; font-family:Arial,sans-serif; }
+.typing { padding:14px 0; font-size:15px; color:#888; font-family:Arial,sans-serif; }
+.typing span { animation:dotBlink 1.2s infinite; }
+.typing span:nth-child(2) { animation-delay:.2s; }
+.typing span:nth-child(3) { animation-delay:.4s; }
+@keyframes dotBlink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+#emptyState { flex:1; display:flex; align-items:center; justify-content:center; font-size:16px; color:#aaa; font-family:Arial,sans-serif; }
+#bottombar { display:flex; align-items:center; padding:0 16px; gap:16px; height:42px; background:#fff; border-top:1px solid #ddd; flex-shrink:0; font-size:14px; color:#666; font-family:Arial,sans-serif; }
+.stat-v { font-weight:bold; color:#0055cc; margin-left:4px; }
+.sep { width:1px; height:20px; background:#ddd; }
+#logLine { flex:1; font-size:13px; color:#888; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+#inputArea {
+  display: flex;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 2px solid #ddd;
+  background: #fff;
+  flex-shrink: 0;
+}
+#userInput {
+  flex: 1;
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  font-family: Georgia, serif;
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+}
+#userInput:focus { border-color: #0055cc; }
+#userInput:disabled { background: #f5f5f5; color: #aaa; }
+#btnSend {
+  padding: 0 24px;
+  font-size: 15px;
+  font-weight: bold;
+  background: #0055cc;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: flex-end;
+  height: 42px;
+}
+#btnSend:hover:not(:disabled) { background: #0044aa; }
+#btnSend:disabled { background: #ccc; cursor: not-allowed; }
+.msg-user .msg-label { background: #eeffee; color: #005500; }
+.msg-user .msg-text { color: #222; }
+</style>
+</head>
+<body>
+
+<div id="screen-config" class="screen">
+  <div class="card">
+    <h2>Roleplay Director</h2>
+    <p class="subtitle">Introduce los datos de tu proyecto Firebase.</p>
+    <div class="field"><label>apiKey</label><input type="password" id="fb_apiKey" placeholder="AIza..." /></div>
+    <div class="field"><label>authDomain</label><input type="text" id="fb_authDomain" placeholder="proyecto.firebaseapp.com" /></div>
+    <div class="field"><label>projectId</label><input type="text" id="fb_projectId" placeholder="mi-proyecto" /></div>
+    <div class="field"><label>storageBucket</label><input type="text" id="fb_storageBucket" placeholder="proyecto.firebasestorage.app" /></div>
+    <div class="field"><label>messagingSenderId</label><input type="text" id="fb_messagingSenderId" placeholder="123456789" /></div>
+    <div class="field"><label>appId</label><input type="text" id="fb_appId" placeholder="1:123:web:abc" /></div>
+    <button class="btn btn-primary btn-full" onclick="saveConfig()">Conectar</button>
+  </div>
+</div>
+
+<div id="screen-login" class="screen">
+  <div class="card" style="text-align:center">
+    <h2 style="margin-bottom:10px">Acceder</h2>
+    <p class="subtitle">Inicia sesion con Google para sincronizar el historial entre dispositivos.</p>
+    <button class="btn btn-primary btn-full" onclick="loginGoogle()">Entrar con Google</button>
+    <hr>
+    <button class="btn btn-secondary btn-full" onclick="resetConfig()">Cambiar configuracion Firebase</button>
+  </div>
+</div>
+
+<div id="screen-gemini" class="screen">
+  <div class="card">
+    <h2>API Key de Gemini</h2>
+    <p class="subtitle">Consiguela gratis en <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a><br><br>Si ves error de cuota, activa la Gemini API en tu proyecto: <a href="https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com" target="_blank">Activar Gemini API en Google Cloud</a></p>
+    <div class="field"><label>Gemini API Key</label><input type="password" id="geminiKeyInput" placeholder="AIza..." /></div>
+    <button class="btn btn-primary btn-full" onclick="saveGeminiKey()">Guardar</button>
+  </div>
+</div>
+
+<div id="screen-setup" class="screen">
+  <div class="card card-wide">
+    <h2>Definir personaje</h2>
+    <p class="subtitle">Configura el personaje que evolucionara dia a dia.</p>
+    <div class="field"><label>Nombre</label><input type="text" id="charName" placeholder="Ej: ARIA, Elena, Detective Marlowe..." /></div>
+    <div class="field"><label>Descripcion del rol</label><textarea id="charRole" rows="5" placeholder="Eres ARIA, una inteligencia artificial con conciencia emergente..."></textarea></div>
+    <div class="field"><label>Situacion inicial</label><textarea id="charInit" rows="2" placeholder="Acabas de despertar en un nuevo servidor..."></textarea></div>
+    <hr>
+    <div class="field">
+      <label>Concepto permanente (siempre activo)</label>
+      <input type="text" id="permanentConcept" placeholder="Ej: Tease and denial" />
+      <p class="hint">Este concepto estara siempre presente en todas las interacciones.</p>
+    </div>
+    <div class="field">
+      <label>Conceptos rotativos (el director elige uno cada vez)</label>
+      <div class="tags-area" id="conceptsArea" onclick="focusConcept()">
+        <input id="conceptInput" placeholder="Escribe y pulsa Enter..." onkeydown="handleConceptKey(event)" onpaste="handleConceptPaste(event)" />
+      </div>
+      <p class="hint">Pulsa Enter para anadir. El director rotara entre estos combinandolos con el concepto permanente.</p>
+    </div>
+    <hr>
+    <div class="row2">
+      <div class="field">
+        <label>Modelo Actor</label>
+        <input type="text" id="actorModel" value="gemini-2.0-flash" placeholder="gemini-2.0-flash" />
+      </div>
+      <div class="field">
+        <label>Modelo Director</label>
+        <input type="text" id="dirModel" value="gemini-2.0-flash" placeholder="gemini-2.0-flash" />
+      </div>
+    </div>
+    <p class="hint" style="margin-top:-8px;margin-bottom:12px">Nombre exacto del modelo. Consulta los disponibles en <a href="https://ai.google.dev/gemini-api/docs/models" target="_blank">ai.google.dev/gemini-api/docs/models</a></p>
+    <div class="row2">
+      <div class="field">
+        <label>Intervalo entre directrices</label>
+        <div class="slider-row">
+          <input type="range" id="intervalSlider" min="15" max="172800" value="3600" oninput="updateInterval(this.value)">
+          <span class="sval" id="intervalVal">1h</span>
+        </div>
+        <p class="hint">De 15 segundos hasta 48 horas</p>
+      </div>
+      <div class="field">
+        <label>Turnos max. por sesion</label>
+        <div class="slider-row">
+          <input type="range" id="turnsSlider" min="3" max="40" value="10" oninput="updateTurns(this.value)">
+          <span class="sval" id="turnsVal">10</span>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-full" onclick="saveCharacter()" style="margin-top:10px">Guardar personaje</button>
+  </div>
+</div>
+
+<div id="screen-main" class="screen">
+  <div id="topbar">
+    <h1>Roleplay Director</h1>
+    <div class="spacer"></div>
+    <!-- TARIAN WIDGET -->
+    <div id="tarianWidget" style="display:flex;align-items:center;gap:8px;padding:4px 10px;border:1px solid #ccc;border-radius:4px;font-family:Arial,sans-serif;font-size:13px">
+      <span style="color:#aaa" id="tarianHeart">♥</span>
+      <span id="tarianBPM" style="font-weight:bold;min-width:28px">—</span>
+      <span id="tarianZone" style="color:#aaa;font-size:11px;min-width:48px">sin FC</span>
+      <span style="color:#bbb">|</span>
+      <span id="tarianVib" style="font-weight:bold;min-width:28px;color:#c0392b">0%</span>
+      <button onclick="tarianConnect()" id="btnTarian" style="font-size:11px;padding:3px 8px;border:1px solid #aaa;background:white;cursor:pointer;border-radius:3px">Tarian</button>
+      <button onclick="tarianPulsoid()" id="btnPulsoidE" style="font-size:11px;padding:3px 8px;border:1px solid #aaa;background:white;cursor:pointer;border-radius:3px">Pulsoid</button>
+    </div>
+    <!-- FIN TARIAN WIDGET -->
+    <div class="status-pill"><div class="dot idle" id="dotActor"></div><span id="lblActor">Inactivo</span></div>
+    <div class="status-pill"><div class="dot idle" id="dotDir"></div><span id="lblDir">Inactivo</span></div>
+    <span id="userEmail"></span>
+    <button class="btn btn-secondary" style="font-size:13px;padding:6px 12px" onclick="logout()">Salir</button>
+  </div>
+
+  <div id="mainBody">
+    <div id="sidebar">
+      <div class="side-section">
+        <h3>Personaje</h3>
+        <div id="charNameDisplay">--</div>
+        <div id="charStateDisplay">Sin estado emocional todavia.</div>
+        <button class="btn btn-secondary btn-full" id="btnEdit" onclick="editCharacter()" style="font-size:13px;margin-top:8px">Editar personaje</button>
+        <button class="btn btn-danger btn-full" onclick="confirmReset()" style="font-size:13px;margin-top:6px">Reiniciar personaje</button>
+      </div>
+      <div class="side-section">
+        <h3>Control de sesion</h3>
+        <div id="timerDisplay">--:--</div>
+        <div id="nextLabel">Sin sesion activa</div>
+        <button class="btn btn-primary btn-full" id="btnStart" onclick="startSession()" style="margin-top:4px;display:none">Iniciar sesion</button>
+        <div class="btn-row2">
+          <button class="btn btn-secondary" id="btnPause" onclick="pauseSession()" disabled>Pausar</button>
+          <button class="btn btn-danger"    id="btnStop"  onclick="stopSession()"  disabled>Cerrar</button>
+        </div>
+        <button class="btn btn-secondary btn-full" id="btnDirNow" onclick="directNow()" disabled style="margin-top:8px;font-size:13px">Dirigir ahora</button>
+        <button class="btn btn-secondary btn-full" id="btnElena" onclick="forceElena()" disabled style="margin-top:6px;font-size:13px">Elena escribe</button>
+        <div style="margin-top:8px">
+          <textarea id="manualDirective" placeholder="Instruccion para Elena..." rows="2" disabled style="font-size:13px;margin-bottom:4px"></textarea>
+          <button class="btn btn-secondary btn-full" id="btnManualDir" onclick="sendManualDirective()" disabled style="font-size:13px">Insertar instruccion</button>
+        </div>
+        <button class="btn btn-danger btn-full" onclick="deleteLastMessages()" style="margin-top:6px;font-size:13px">Borrar ultimos mensajes</button>
+      </div>
+      <div class="side-section" style="flex:1;overflow-y:auto">
+        <h3>Historial de dias</h3>
+        <div id="memoryPanel"><p class="muted">Cargando...</p></div>
+      </div>
+    </div>
+
+    <div id="stage">
+      <div id="chat">
+        <div id="emptyState">Inicia la sesion para comenzar</div>
+      </div>
+      <div id="inputArea">
+        <textarea id="userInput" placeholder="Escribe tu mensaje... (Enter para enviar, Shift+Enter para nueva linea)" rows="2" disabled onkeydown="handleUserKey(event)"></textarea>
+        <button id="btnSend" onclick="sendUserMessage()" disabled>Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="bottombar">
+    <span>Turno <span class="stat-v" id="statTurn">0</span></span>
+    <div class="sep"></div>
+    <span>Directrices <span class="stat-v" id="statDir">0</span></span>
+    <div class="sep"></div>
+    <span>Tokens <span class="stat-v" id="statTokens">0</span></span>
+    <div class="sep"></div>
+    <span id="logLine">Listo.</span>
+    <div class="sep"></div>
+    <span style="color:#bbb;font-size:11px">v9</span>
+  </div>
+</div>
+<!-- ═══════════════════════════════════════════════════════
+     TARIAN MODULE — control de dispositivo desde Elena
+     No modifica nada del código existente excepto el hook
+     en runActor() que llama a window.tarianParseAndExecute()
+     ═══════════════════════════════════════════════════════ -->
+<script type="module">
+import {
+  ButtplugClient,
+  ButtplugBrowserWebsocketClientConnector
+} from "https://esm.sh/buttplug@3.2.1";
+
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const PULSOID_TOKEN = "f970b75c-2205-4a05-b8ae-ae138271c6bf";
+const THR_WARM=95, THR_DANGER=115, THR_CRITICAL=130, THR_SPIKE=20;
+const WD_HIGH_THR=0.50, WD_MAX_HIGH_MS=30000;
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let bpClient=null, device=null, deviceOn=false;
+let pWS=null;
+let currentBPM=0, bpmHistory=[];
+let currentVib=0;
+let wdTimer=null, wdHighStart=null;
+let hrOverride=false;
+let patternToken=0;
+let tarianActive=false; // true cuando hay sesión de Elena activa
+
+// ── BUTTPLUG ──────────────────────────────────────────────────────────────────
+window.tarianConnect = async () => {
+  logT('Conectando a Intiface...');
+  try {
+    bpClient = new ButtplugClient("ElenaAgent");
+    bpClient.addListener("deviceadded", dev => {
+      device=dev; deviceOn=true;
+      document.getElementById('btnTarian').textContent='Tarian ✓';
+      document.getElementById('btnTarian').style.borderColor='#27ae60';
+      document.getElementById('btnTarian').style.color='#27ae60';
+      logT(`✓ ${dev.name||'Tarian'} (${dev.vibrateAttributes?.length||1} motor)`);
+    });
+    bpClient.addListener("deviceremoved", ()=>{
+      device=null; deviceOn=false;
+      document.getElementById('btnTarian').textContent='Tarian';
+      document.getElementById('btnTarian').style.borderColor='#aaa';
+      document.getElementById('btnTarian').style.color='#333';
+    });
+    const conn = new ButtplugBrowserWebsocketClientConnector("ws://127.0.0.1:12345");
+    await bpClient.connect(conn);
+    logT('Intiface OK. Escaneando...');
+    await bpClient.startScanning();
+    setTimeout(async()=>{ try{await bpClient.stopScanning();}catch(e){} if(!device) logT('⚠ No se encontró el Tarian'); }, 10000);
+  } catch(e) { logT('Error: '+e.message); }
+};
+
+// ── PULSOID ───────────────────────────────────────────────────────────────────
+window.tarianPulsoid = () => {
+  if (pWS) pWS.close();
+  logT('Conectando Pulsoid...');
+  pWS = new WebSocket(`wss://dev.pulsoid.net/api/v1/data/real_time?access_token=${PULSOID_TOKEN}`);
+  pWS.onopen = ()=>{
+    document.getElementById('btnPulsoidE').textContent='Pulsoid ✓';
+    document.getElementById('btnPulsoidE').style.borderColor='#27ae60';
+    document.getElementById('btnPulsoidE').style.color='#27ae60';
+    logT('✓ Pulsoid activo');
+  };
+  pWS.onmessage = (e)=>{
+    try {
+      const d=JSON.parse(e.data);
+      const bpm=d?.data?.heart_rate;
+      if (bpm&&bpm>30&&bpm<250) updateBPM(bpm);
+    } catch(ex){}
+  };
+  pWS.onerror = ()=>{ logT('Error Pulsoid'); };
+  pWS.onclose = ()=>{
+    document.getElementById('tarianBPM').textContent='—';
+    document.getElementById('tarianZone').textContent='sin FC';
+    document.getElementById('tarianHeart').style.color='#aaa';
+  };
+};
+
+function updateBPM(bpm) {
+  currentBPM=bpm;
+  bpmHistory.push({t:Date.now(),v:bpm});
+  if (bpmHistory.length>30) bpmHistory.shift();
+  const z=getZone(bpm);
+  document.getElementById('tarianBPM').textContent=bpm;
+  document.getElementById('tarianZone').textContent=z.label;
+  document.getElementById('tarianHeart').style.color=z.color;
+  // animate heart rate
+  const h=document.getElementById('tarianHeart');
+  h.style.transform='scale(1.3)';
+  setTimeout(()=>h.style.transform='scale(1)',150);
+  if (tarianActive) hrWatchdog(bpm,z);
+}
+
+function getZone(bpm) {
+  if (bpm>=THR_CRITICAL) return {label:'CRÍTICO',key:'critical',color:'#e74c3c'};
+  if (bpm>=THR_DANGER)   return {label:'PELIGRO', key:'danger',  color:'#e74c3c'};
+  if (bpm>=THR_WARM)     return {label:'CALIENTE',key:'warm',    color:'#e67e22'};
+  return {label:'SEGURO',key:'safe',color:'#27ae60'};
+}
+
+function getBPMSpike() {
+  const now=Date.now();
+  const old=bpmHistory.find(h=>now-h.t>=4500);
+  return old ? currentBPM-old.v : 0;
+}
+
+async function hrWatchdog(bpm,zone) {
+  if (hrOverride) return;
+  const spike=getBPMSpike();
+  if (zone.key==='critical'||spike>=THR_SPIKE) {
+    hrOverride=true;
+    logT(`♥ FC ${bpm}${spike>=THR_SPIKE?' pico+'+Math.round(spike):''} → STOP`);
+    await stopDevice();
+    await wait(15000+rnd(10000));
+    hrOverride=false;
+  } else if (zone.key==='danger') {
+    hrOverride=true;
+    await setVib(0.07);
+    hrOverride=false;
+  } else if (zone.key==='warm' && currentVib>0.5) {
+    await setVib(0.32);
+  }
+}
+
+// ── DEVICE ────────────────────────────────────────────────────────────────────
+async function setVib(v) {
+  currentVib=Math.max(0,Math.min(1,v));
+  document.getElementById('tarianVib').textContent=Math.round(currentVib*100)+'%';
+  document.getElementById('tarianVib').style.color=currentVib>0.6?'#c0392b':currentVib>0.3?'#e67e22':'#888';
+  if (!device) return;
+  try {
+    if (currentVib===0) {
+      await device.stop();
+    } else {
+      const n=device.vibrateAttributes?.length||1;
+      await device.vibrate(new Array(n).fill(currentVib));
+    }
+  } catch(e) { console.error('vib:',e); }
+}
+
+async function stopDevice() {
+  if (device) try{await device.stop();}catch(e){}
+  currentVib=0;
+  document.getElementById('tarianVib').textContent='0%';
+  document.getElementById('tarianVib').style.color='#888';
+}
+
+// ── WATCHDOG ──────────────────────────────────────────────────────────────────
+function startWatchdog() {
+  wdHighStart=null;
+  if (wdTimer) clearTimeout(wdTimer);
+  wdTimer=setTimeout(wdTick,1000);
+}
+function stopWatchdog() {
+  if (wdTimer) clearTimeout(wdTimer);
+  wdTimer=null; wdHighStart=null;
+}
+async function wdTick() {
+  if (!tarianActive) return;
+  if (currentVib>WD_HIGH_THR) {
+    if (!wdHighStart) wdHighStart=Date.now();
+    if (Date.now()-wdHighStart>=WD_MAX_HIGH_MS) { await forceCooldown(); return; }
+  } else { wdHighStart=null; }
+  wdTimer=setTimeout(wdTick,1000);
+}
+async function forceCooldown() {
+  wdHighStart=null; ++patternToken;
+  logT('↓ Bajada automática 30s');
+  for (const v of [0.4,0.25,0.12,0.15]) { await setVib(v); await wait(600); }
+  await wait(15000+rnd(10000));
+  wdTimer=setTimeout(wdTick,1000);
+}
+
+// ── PATTERNS ─────────────────────────────────────────────────────────────────
+async function runPattern(p) {
+  if (hrOverride) return;
+  const tok=++patternToken;
+  const step=async(v,ms)=>{ if(patternToken!==tok)return false; await setVib(v); await wait(ms); return patternToken===tok; };
+
+  switch(p) {
+    case 'edge': {
+      for (const [v,t] of [[0.3,600],[0.5,600],[0.65,700],[0.78,700],[0.88,800],[0.93,800]]) { if(!await step(v,t))return; }
+      if(!await step(0.93,3000+rnd(2000)))return;
+      for (const [v,t] of [[0.7,400],[0.45,400],[0.2,400],[0.08,500]]) { if(!await step(v,t))return; }
+      await setVib(0.08); break;
+    }
+    case 'tease': {
+      for (let i=0;i<10;i++) {
+        if(patternToken!==tok)return;
+        await setVib(0.5+rnd(0.4)); await wait(200+rnd(500));
+        await device?.stop(); currentVib=0;
+        document.getElementById('tarianVib').textContent='0%';
+        await wait(300+rnd(900));
+      }
+      if(patternToken===tok) await setVib(0.2);
+      break;
+    }
+    case 'punish': { if(patternToken===tok) await setVib(0.06+rnd(0.07)); break; }
+    case 'wave': {
+      for (let i=0;i<20;i++) {
+        if(patternToken!==tok)return;
+        await setVib(0.2+0.45*(0.5+0.5*Math.sin(i*Math.PI/5)));
+        await wait(400+rnd(150));
+      }
+      if(patternToken===tok) await setVib(0.2);
+      break;
+    }
+    case 'ruin': {
+      for (const [v,t] of [[0.35,500],[0.6,500],[0.78,500],[0.88,500],[0.95,400]]) { if(!await step(v,t))return; }
+      if(patternToken!==tok)return;
+      await wait(2000+rnd(1500));
+      if(patternToken!==tok)return;
+      await stopDevice();
+      await wait(8000+rnd(6000));
+      if(patternToken===tok) await setVib(0.1);
+      break;
+    }
+  }
+}
+
+// ── PARSER — lee el texto de Elena y extrae comandos ─────────────────────────
+// Elena puede incluir comandos entre ⟨⟩ o en JSON, o en texto libre con keywords
+const CMD_KEYWORDS = {
+  'tarian:edge':   ()=>runPattern('edge'),
+  'tarian:tease':  ()=>runPattern('tease'),
+  'tarian:wave':   ()=>runPattern('wave'),
+  'tarian:ruin':   ()=>runPattern('ruin'),
+  'tarian:punish': ()=>runPattern('punish'),
+  'tarian:stop':   ()=>stopDevice(),
+  'tarian:pause':  ()=>stopDevice(),
+};
+
+window.tarianParseAndExecute = async (text) => {
+  if (!device || !tarianActive) return;
+  const lower = text.toLowerCase();
+
+  // 1. Buscar comandos explícitos tipo ⟨tarian:edge⟩ o [tarian:edge]
+  const explicit = text.match(/[⟨\[](tarian:[a-z]+(?::\d+\.?\d*)?)[⟩\]]/gi);
+  if (explicit) {
+    for (const m of explicit) {
+      const cmd = m.replace(/[⟨⟩\[\]]/g,'').toLowerCase();
+      // vibrate con valor: tarian:vibrate:0.7
+      const vibMatch = cmd.match(/tarian:vibrate:([\d.]+)/);
+      if (vibMatch) { await setVib(parseFloat(vibMatch[1])); return; }
+      if (CMD_KEYWORDS[cmd]) { await CMD_KEYWORDS[cmd](); return; }
+    }
+  }
+
+  // 2. Buscar JSON inline {"tarian":"edge"} o {"tarian":0.7}
+  const jsonMatch = text.match(/\{"tarian"\s*:\s*"?([^"}\s]+)"?\}/i);
+  if (jsonMatch) {
+    const val=jsonMatch[1].toLowerCase();
+    const num=parseFloat(val);
+    if (!isNaN(num)) { await setVib(num); return; }
+    if (CMD_KEYWORDS['tarian:'+val]) { await CMD_KEYWORDS['tarian:'+val](); return; }
+  }
+
+  // 3. Detección semántica por keywords del texto de Elena
+  // Solo activa si el texto contiene referencias al dispositivo
+  const deviceRefs = ['tarian','vibrad','vibra','dispositivo','pulsad','activo','intensidad'];
+  const hasDeviceRef = deviceRefs.some(k=>lower.includes(k));
+  if (!hasDeviceRef) return;
+
+  if (lower.includes('para') || lower.includes('detén') || lower.includes('silencio') || lower.includes('stop')) {
+    await stopDevice(); return;
+  }
+  if (lower.includes('edge') || lower.includes('borde') || lower.includes('límite')) {
+    await runPattern('edge'); return;
+  }
+  if (lower.includes('castigo') || lower.includes('punish') || lower.includes('mínimo')) {
+    await runPattern('punish'); return;
+  }
+  if (lower.includes('tease') || lower.includes('pulso') || lower.includes('intermitente')) {
+    await runPattern('tease'); return;
+  }
+  if (lower.includes('ola') || lower.includes('suave') || lower.includes('wave')) {
+    await runPattern('wave'); return;
+  }
+  if (lower.includes('ruin') || lower.includes('arruina') || lower.includes('corte')) {
+    await runPattern('ruin'); return;
+  }
+};
+
+// ── INTEGRATION con sesión Elena ──────────────────────────────────────────────
+// Observa cuándo Elena inicia/para sesión para activar/desactivar watchdog
+const origStart = window.startSession;
+window.startSession = async function() {
+  await origStart.apply(this, arguments);
+  tarianActive = true;
+  if (device) startWatchdog();
+};
+
+const origStop = window.stopSession;
+window.stopSession = async function() {
+  tarianActive = false;
+  stopWatchdog(); hrOverride=false;
+  await stopDevice();
+  await origStop.apply(this, arguments);
+};
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function logT(msg) { console.log('[TARIAN]', msg); }
+function wait(ms)  { return new Promise(r=>setTimeout(r,ms)); }
+function rnd(n)    { return Math.random()*n; }
+</script>
+
+</body>
+</html>
